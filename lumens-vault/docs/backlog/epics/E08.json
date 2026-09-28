@@ -1,0 +1,423 @@
+{
+  "epic": "E08",
+  "title": "Backend: Event Ingestion",
+  "milestone": "LV2 - Deploy & Backend Core",
+  "issues": [
+    {
+      "id": "E08-01",
+      "title": "Build the Soroban RPC client wrapper",
+      "labels": ["backend"],
+      "requirements": ["FR-17"],
+      "dependsOn": ["E07-03", "E07-17"],
+      "scope": "A thin wrapper over @stellar/stellar-sdk's RPC server that the event source builds on. Keeping it separate means retries, timeouts and error mapping live in one place rather than being re-implemented per call site.",
+      "files": [
+        "lumens-vault/backend/src/adapters/soroban-rpc/client.ts (new)",
+        "lumens-vault/backend/test/adapters/soroban-rpc/client.test.ts (new)"
+      ],
+      "acceptance": [
+        "Constructs from configuration; the RPC URL is never hardcoded",
+        "Network failures and non-200 responses map to the transient error class from E07-17, not raw SDK errors",
+        "A timeout is applied and is configurable",
+        "Tests use a stubbed transport rather than hitting a live network, so CI does not depend on an external service"
+      ],
+      "nonGoals": ["No getEvents logic yet; that is E08-03."]
+    },
+    {
+      "id": "E08-02",
+      "title": "Probe and record the RPC provider's real event retention window",
+      "labels": ["backend"],
+      "requirements": ["D-3", "FR-17"],
+      "dependsOn": ["E08-01"],
+      "scope": "Stellar's docs say the network can support querying up to seven days of events, but each RPC node retains only what its operator configured and public nodes commonly keep twenty-four hours. This project has already made one design mistake from treating a documented maximum as a guaranteed default. Measure the actual provider rather than assuming either number.",
+      "files": [
+        "lumens-vault/backend/src/adapters/soroban-rpc/retention.ts (new)",
+        "lumens-vault/docs/rpc-retention.md (new)"
+      ],
+      "acceptance": [
+        "getHealth is called against the configured provider and the ledger retention window read from the response; paste the raw response",
+        "The oldest and latest available ledgers are recorded, converted to a real-time span at five seconds per ledger",
+        "The function is available at runtime so ingestion can compare its cursor against the oldest ledger still served",
+        "The doc states the measured value, the provider, and the date, and warns the value is per-provider and can change",
+        "States the consequence explicitly: if the backend is offline longer than this window, events are permanently unavailable from that provider and the cache cannot be fully rebuilt from it"
+      ],
+      "nonGoals": ["Not choosing a provider. Not building an archival fallback."]
+    },
+    {
+      "id": "E08-03",
+      "title": "Implement paginated getEvents fetching",
+      "labels": ["backend"],
+      "requirements": ["FR-17"],
+      "dependsOn": ["E08-01"],
+      "scope": "getEvents returns a capped number of records per response and a cursor for continuation. Ingestion must follow the cursor to completion or it will silently process only the first page of a busy period.",
+      "files": [
+        "lumens-vault/backend/src/adapters/soroban-rpc/fetch-events.ts (new)",
+        "lumens-vault/backend/test/adapters/soroban-rpc/fetch-events.test.ts (new)"
+      ],
+      "acceptance": [
+        "Accepts either a startLedger or a cursor, per the FetchEventsParams port contract, and rejects a call providing neither",
+        "Follows pagination until the provider reports no further pages",
+        "The per-response record cap is verified against current behaviour at implementation time rather than taken from any document, and the observed value recorded in a comment",
+        "Filters to the configured contract id so unrelated contract events are never ingested",
+        "A test with a stubbed multi-page response asserts every page is consumed and events arrive in ledger order"
+      ],
+      "nonGoals": ["Decoding is E08-05 onward."]
+    },
+    {
+      "id": "E08-04",
+      "title": "Implement retry with backoff for transient RPC failures",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "NFR-4"],
+      "dependsOn": ["E08-03", "E07-17"],
+      "scope": "A public RPC endpoint will rate-limit and occasionally time out. NFR-4 makes a temporarily stale cache acceptable, so the correct behaviour is to back off and retry rather than to fail loudly or hammer the endpoint.",
+      "files": [
+        "lumens-vault/backend/src/adapters/soroban-rpc/retry.ts (new)",
+        "lumens-vault/backend/test/adapters/soroban-rpc/retry.test.ts (new)"
+      ],
+      "acceptance": [
+        "Only transient errors are retried; permanent ones such as a malformed request fail immediately",
+        "Backoff is exponential with jitter and a stated ceiling on attempts",
+        "Rate-limit responses are respected, honouring a Retry-After header when present",
+        "Tests use fake timers so they do not actually wait",
+        "Exhausting retries surfaces a clear error naming the last failure, and ingestion continues at the next cycle rather than crashing the process"
+      ],
+      "nonGoals": ["No circuit breaker at this scale."]
+    },
+    {
+      "id": "E08-05",
+      "title": "Build the event decoding framework",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "NFR-3"],
+      "dependsOn": ["E08-03"],
+      "scope": "Raw RPC events carry XDR-encoded topics and data. The port's contract is that the domain never sees XDR, so decoding happens entirely in this adapter. Build the dispatch and shared decoding helpers before the nine per-event decoders.",
+      "files": [
+        "lumens-vault/backend/src/adapters/soroban-rpc/decode/index.ts (new)",
+        "lumens-vault/backend/test/adapters/soroban-rpc/decode/index.test.ts (new)"
+      ],
+      "acceptance": [
+        "Dispatches on the event's identifying topic to the right decoder",
+        "Shared helpers convert ScVal addresses to strings, i128 values to bigint, and u32 to number",
+        "An unrecognised event type is logged and skipped rather than throwing — a contract upgrade could add an event this backend does not know, and that must not stop ingestion",
+        "EventBase fields — id, ledger, ledgerClosedAt, txHash — are populated for every event from the RPC envelope",
+        "The topic layout it assumes matches what E05-08 observed from real emissions; cite that finding rather than inferring the layout"
+      ],
+      "nonGoals": ["Individual decoders are E08-06 through E08-10."]
+    },
+    {
+      "id": "E08-06",
+      "title": "Decode DepositEvent",
+      "labels": ["backend"],
+      "requirements": ["FR-17"],
+      "dependsOn": ["E08-05"],
+      "scope": "Deposits carry from and asset as topics, with vault_id and amount as data. Amount is i128 and must become bigint, never a JS number.",
+      "files": [
+        "lumens-vault/backend/src/adapters/soroban-rpc/decode/deposit.ts (new)",
+        "lumens-vault/backend/test/adapters/soroban-rpc/decode/deposit.test.ts (new)"
+      ],
+      "acceptance": [
+        "Produces the port's deposit VaultEvent shape with every field correctly typed",
+        "A fixture captured from a real testnet deposit is decoded correctly; the fixture is committed so the test does not need a network",
+        "An amount exceeding Number.MAX_SAFE_INTEGER decodes to the exact bigint — this is the assertion that catches a number conversion",
+        "A malformed event produces a clear error naming the field that failed rather than a generic parse failure"
+      ],
+      "nonGoals": ["State reconstruction is E09."]
+    },
+    {
+      "id": "E08-07",
+      "title": "Decode WithdrawEvent",
+      "labels": ["backend"],
+      "requirements": ["FR-17"],
+      "dependsOn": ["E08-05"],
+      "scope": "Withdrawals mirror deposits with to and asset as topics. The amount is the amount withdrawn, not the remaining balance — a distinction E05-09 pins on the contract side and which the reconstruction in E09 depends on.",
+      "files": [
+        "lumens-vault/backend/src/adapters/soroban-rpc/decode/withdraw.ts (new)",
+        "lumens-vault/backend/test/adapters/soroban-rpc/decode/withdraw.test.ts (new)"
+      ],
+      "acceptance": [
+        "Produces the port's withdraw VaultEvent shape",
+        "A fixture from a real testnet withdrawal decodes correctly and is committed",
+        "A partial-withdrawal fixture is included, and a comment states that amount is the withdrawn portion",
+        "Large amounts round-trip exactly as bigint"
+      ],
+      "nonGoals": ["Balance arithmetic is E09-03."]
+    },
+    {
+      "id": "E08-08",
+      "title": "Decode the pause and unpause events",
+      "labels": ["backend"],
+      "requirements": ["FR-18"],
+      "dependsOn": ["E08-05"],
+      "scope": "Both carry only the acting admin as a topic and no data fields, which makes them the simplest case and a good check that the framework handles data-free events.",
+      "files": [
+        "lumens-vault/backend/src/adapters/soroban-rpc/decode/pause.ts (new)",
+        "lumens-vault/backend/test/adapters/soroban-rpc/decode/pause.test.ts (new)"
+      ],
+      "acceptance": [
+        "Both event types decode to their port shapes with the admin address",
+        "Committed fixtures from real testnet pause and unpause transactions",
+        "An event with no data payload does not produce an error or an undefined field"
+      ],
+      "nonGoals": ["Admin action storage is E09-08."]
+    },
+    {
+      "id": "E08-09",
+      "title": "Decode the whitelist and delist events",
+      "labels": ["backend"],
+      "requirements": ["FR-11", "FR-18"],
+      "dependsOn": ["E08-05"],
+      "scope": "These carry admin as the only topic with asset in the data. That placement means the asset cannot be used as an RPC topic filter, so the backend must decode every one of these events and inspect its payload — which is exactly why whitelist derivation has to happen here rather than being queried.",
+      "files": [
+        "lumens-vault/backend/src/adapters/soroban-rpc/decode/whitelist.ts (new)",
+        "lumens-vault/backend/test/adapters/soroban-rpc/decode/whitelist.test.ts (new)"
+      ],
+      "acceptance": [
+        "Both decode to their port shapes with admin and asset",
+        "Committed fixtures from real testnet add_asset and remove_asset transactions",
+        "A comment records that asset is data rather than a topic and what that implies for filtering"
+      ],
+      "nonGoals": ["Whitelist derivation is E09-07."]
+    },
+    {
+      "id": "E08-10",
+      "title": "Decode the admin transfer, upgrade and config update events",
+      "labels": ["backend"],
+      "requirements": ["FR-18", "FR-13", "FR-14"],
+      "dependsOn": ["E08-05", "E02-09"],
+      "scope": "The three highest-consequence admin events. UpgradeEvent carries a wasm hash as BytesN<32>, which needs a defined string encoding so the Operations page can display it and an operator can compare it against what they expected to deploy.",
+      "files": [
+        "lumens-vault/backend/src/adapters/soroban-rpc/decode/admin.ts (new)",
+        "lumens-vault/backend/test/adapters/soroban-rpc/decode/admin.test.ts (new)"
+      ],
+      "acceptance": [
+        "NewAdminEvent decodes with both the previous and the new admin",
+        "UpgradeEvent decodes with the new wasm hash as lowercase hex, and the encoding choice is stated in a comment",
+        "ConfigUpdatedEvent decodes with both lock bounds as numbers",
+        "Committed fixtures for all three from real testnet transactions",
+        "The decoded wasm hash for a known upgrade matches the hash reported by stellar contract build for that binary; assert this, since it is the whole point of surfacing it"
+      ],
+      "nonGoals": ["Alerting on these is E09-09."]
+    },
+    {
+      "id": "E08-11",
+      "title": "Assemble the event source adapter behind its port",
+      "labels": ["backend"],
+      "requirements": ["FR-17"],
+      "dependsOn": ["E08-03", "E08-04", "E08-06", "E08-07", "E08-08", "E08-09", "E08-10"],
+      "scope": "Compose the client, pagination, retry and decoders into one class implementing IEventSource.",
+      "files": [
+        "lumens-vault/backend/src/adapters/soroban-rpc/index.ts (new)",
+        "lumens-vault/backend/test/adapters/soroban-rpc/index.test.ts (new)"
+      ],
+      "acceptance": [
+        "Implements fetchEvents and getLedgerBounds with no remaining stubs",
+        "fetchEvents returns the port's EventPage with nextCursor null at the tip, and a test asserts the null case specifically",
+        "latestLedger and oldestLedger are populated from the provider, not guessed",
+        "An integration test against a stubbed provider walks several pages of mixed event types and asserts every one decodes"
+      ],
+      "nonGoals": ["The polling loop is E08-12."]
+    },
+    {
+      "id": "E08-12",
+      "title": "Implement the ingestion loop",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "NFR-4"],
+      "dependsOn": ["E08-11", "E07-15"],
+      "scope": "Drive the event source on a timer: read the cursor, fetch, persist, advance. The ordering matters — the cursor must only advance after the events it covers are durably stored, or a crash loses them silently.",
+      "files": [
+        "lumens-vault/backend/src/ingestion/loop.ts (new)",
+        "lumens-vault/backend/test/ingestion/loop.test.ts (new)"
+      ],
+      "acceptance": [
+        "Each cycle reads the stored cursor, fetches from it, persists events and advances the cursor inside a single transaction",
+        "A crash simulated between persist and cursor advance leaves the cursor unmoved, and the next cycle reprocesses those events harmlessly because saveEvents is idempotent; a test proves this",
+        "The interval is configurable and cycles do not overlap — a slow cycle delays the next rather than running concurrently",
+        "Errors are logged and the loop continues; one bad cycle never stops ingestion permanently",
+        "A clean shutdown finishes or abandons the current cycle without leaving a transaction open"
+      ],
+      "nonGoals": ["Cold start is E08-13; gap recovery is E08-14."]
+    },
+    {
+      "id": "E08-13",
+      "title": "Handle cold start when no cursor exists",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "D-3"],
+      "dependsOn": ["E08-12", "E08-02"],
+      "scope": "On a fresh database there is no cursor. Starting from ledger zero is wrong and would be rejected; starting from the tip silently discards all history. The right starting point depends on the provider's retention and on when the contract was deployed.",
+      "files": [
+        "lumens-vault/backend/src/ingestion/cold-start.ts (new)",
+        "lumens-vault/backend/test/ingestion/cold-start.test.ts (new)"
+      ],
+      "acceptance": [
+        "With no cursor, ingestion starts from the later of the contract's deployment ledger and the provider's oldest served ledger",
+        "The deployment ledger comes from configuration, recorded by E06-05, rather than being discovered by scanning",
+        "If the deployment ledger is older than what the provider still serves, this is logged as a warning naming exactly what history is unreachable — the cache will be incomplete and that must be visible, not silent",
+        "Tests cover both cases"
+      ],
+      "nonGoals": ["No archival node integration."]
+    },
+    {
+      "id": "E08-14",
+      "title": "Detect and report ingestion gaps after an outage",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "D-3", "NFR-4"],
+      "dependsOn": ["E08-13"],
+      "scope": "If the backend is down longer than the provider's retention window, the events in that gap are gone. NFR-4 tolerates a stale cache but a silently incomplete one is different: balances would be wrong with no indication. Detect it and say so.",
+      "files": [
+        "lumens-vault/backend/src/ingestion/gap-detection.ts (new)",
+        "lumens-vault/backend/test/ingestion/gap-detection.test.ts (new)"
+      ],
+      "acceptance": [
+        "On each cycle the stored cursor is compared against the provider's oldest served ledger",
+        "A cursor older than what the provider serves raises a critical alert through IAlertSink naming the ledger range lost",
+        "The gap is recorded so the readiness endpoint and the Operations page can surface that data may be incomplete",
+        "The loop continues from the oldest available ledger rather than stalling, and logs that it is doing so",
+        "A test simulates a cursor behind the retention window and asserts the alert and the recorded gap"
+      ],
+      "nonGoals": ["No automatic backfill from another source."]
+    },
+    {
+      "id": "E08-15",
+      "title": "Expose ingestion lag as a measurable value",
+      "labels": ["backend"],
+      "requirements": ["G-24", "NFR-4"],
+      "dependsOn": ["E08-12"],
+      "scope": "How far behind the tip the cursor sits is the single most useful health signal for this backend, and the readiness endpoint from E07-19 already needs it.",
+      "files": [
+        "lumens-vault/backend/src/ingestion/lag.ts (new)",
+        "lumens-vault/backend/test/ingestion/lag.test.ts (new)"
+      ],
+      "acceptance": [
+        "Lag is computed in ledgers and converted to an approximate real-time span",
+        "A configurable threshold distinguishes acceptable lag from concerning lag, and the default is stated with its reasoning",
+        "The readiness endpoint reports it",
+        "The value is logged once per cycle at a level that does not flood the log"
+      ],
+      "nonGoals": ["No metrics exporter."]
+    },
+    {
+      "id": "E08-16",
+      "title": "Deduplicate events across overlapping poll windows",
+      "labels": ["backend"],
+      "requirements": ["FR-17"],
+      "dependsOn": ["E08-12", "E07-07"],
+      "scope": "Deduplication exists because poll windows overlap and requests get retried — not because of chain reorganisations. Stellar's SCP gives immediate finality and no rollback logic should exist anywhere in this codebase. An earlier design document justified dedup with reorgs, and that reasoning must not creep back in.",
+      "files": [
+        "lumens-vault/backend/test/ingestion/deduplication.test.ts (new)"
+      ],
+      "acceptance": [
+        "A test runs two ingestion cycles over deliberately overlapping ledger ranges and asserts each event is stored exactly once",
+        "A test replays an entire ingestion run from the beginning and asserts the final vault state is identical, proving idempotency end to end",
+        "A comment states the real reason for dedup and explicitly notes that reorg rollback must not be built",
+        "No rollback, revert or reorg-handling code exists anywhere in the ingestion path; state how this was confirmed"
+      ],
+      "nonGoals": ["Do not implement reorg handling."]
+    },
+    {
+      "id": "E08-17",
+      "title": "Order events deterministically within a ledger",
+      "labels": ["backend"],
+      "requirements": ["FR-17"],
+      "dependsOn": ["E08-11"],
+      "scope": "Several events can share a ledger, and applying a withdrawal before the deposit that funded it yields a wrong intermediate balance. Reconstruction must see a stable, correct order.",
+      "files": [
+        "lumens-vault/backend/src/ingestion/ordering.ts (new)",
+        "lumens-vault/backend/test/ingestion/ordering.test.ts (new)"
+      ],
+      "acceptance": [
+        "Events are ordered by ledger, then by their position within the ledger, using a field the RPC response actually provides — state which and show it in a real response",
+        "A test with several events in one ledger asserts the order is stable across repeated runs",
+        "If the provider does not expose a within-ledger ordinal, say so plainly and document what ordering guarantee is actually available rather than inventing one"
+      ],
+      "nonGoals": ["No cross-ledger reordering; ledger order is authoritative."]
+    },
+    {
+      "id": "E08-18",
+      "title": "Handle the contract id changing under the backend",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "G-16"],
+      "dependsOn": ["E08-13", "E06-19"],
+      "scope": "During development the testnet contract will be redeployed. If the backend is pointed at a new contract while holding a database full of the old one's events, the result is a mix of two contracts' history presented as one.",
+      "files": [
+        "lumens-vault/backend/src/ingestion/contract-check.ts (new)",
+        "lumens-vault/backend/test/ingestion/contract-check.test.ts (new)"
+      ],
+      "acceptance": [
+        "The contract id the database was populated with is recorded and checked against configuration at startup",
+        "A mismatch refuses to start, with a message stating both ids and how to reset — it must not silently blend data",
+        "The reset path is documented and matches docs/redeploy.md",
+        "A test covers matching, mismatched, and first-run-empty cases"
+      ],
+      "nonGoals": ["No automatic database reset; deleting data must be a human decision."]
+    },
+    {
+      "id": "E08-19",
+      "title": "Capture real testnet event fixtures for the decoder tests",
+      "labels": ["backend", "testing"],
+      "requirements": ["FR-17"],
+      "dependsOn": ["E06-07", "E08-05"],
+      "scope": "Every decoder test depends on fixtures. Hand-written ones encode the author's assumptions about the XDR layout and will agree with a wrong decoder. Capture real responses from the seeded testnet contract instead.",
+      "files": [
+        "lumens-vault/backend/test/fixtures/events/ (new)",
+        "lumens-vault/backend/test/fixtures/README.md (new)"
+      ],
+      "acceptance": [
+        "Raw getEvents responses are captured from the deployed testnet contract covering every event type the contract emits",
+        "Fixtures are committed unmodified, as returned by the provider",
+        "The README records how they were captured, from which contract id, and on what date, so they can be regenerated",
+        "Any event type that could not be captured is listed explicitly rather than quietly substituted with a hand-written fixture",
+        "A test asserts the fixture set covers every event type in the port's VaultEvent union, so adding an event to the contract without a fixture fails"
+      ],
+      "nonGoals": ["No network access from tests; fixtures are static."]
+    },
+    {
+      "id": "E08-20",
+      "title": "Add an ingestion integration test over the full fixture set",
+      "labels": ["backend", "testing"],
+      "requirements": ["FR-17", "NFR-4"],
+      "dependsOn": ["E08-19", "E08-12"],
+      "scope": "The unit tests cover each piece. One test through the whole path — stubbed provider, real decoders, real database — catches the wiring mistakes that unit tests structurally cannot.",
+      "files": ["lumens-vault/backend/test/ingestion/integration.test.ts (new)"],
+      "acceptance": [
+        "A stubbed provider serves the captured fixtures across several pages",
+        "A full ingestion run persists every event, and the assertions check the stored rows rather than the in-memory objects",
+        "The cursor ends at the expected ledger",
+        "A second run over the same data changes nothing",
+        "Runs against an in-memory database so it is fast enough for CI"
+      ],
+      "nonGoals": ["Full-stack E2E is E17."]
+    },
+    {
+      "id": "E08-21",
+      "title": "Document the ingestion design and its guarantees",
+      "labels": ["backend", "docs"],
+      "requirements": ["FR-17", "NFR-4", "NFR-7"],
+      "dependsOn": ["E08-14", "E08-16", "E08-17"],
+      "scope": "Write down what this layer does and does not promise, so nobody later builds on a guarantee it never made — and so the reorg question is settled in writing rather than rediscovered.",
+      "files": ["lumens-vault/docs/ingestion.md (new)"],
+      "acceptance": [
+        "Describes the cycle, cursor semantics, dedup basis and ordering guarantee",
+        "States plainly what is not guaranteed: completeness after an outage exceeding retention, and freshness at any instant",
+        "Records the measured retention window and links to docs/rpc-retention.md",
+        "States that Stellar has immediate finality, that dedup exists for overlapping windows and retries only, and that no rollback logic exists or should be added",
+        "Restates NFR-4: this is a display cache and withdraw eligibility is always decided on-chain"
+      ],
+      "nonGoals": ["Not duplicating SYSTEM_DESIGN."]
+    },
+    {
+      "id": "E08-22",
+      "title": "Verify ingestion against the live testnet contract",
+      "labels": ["backend", "testing"],
+      "requirements": ["FR-17"],
+      "dependsOn": ["E08-20", "E06-07"],
+      "scope": "Fixtures prove the decoders handle captured data. Only a live run proves the client, pagination, retry and cursor behave against a real provider with real latency and real rate limits.",
+      "files": ["lumens-vault/docs/ingestion.md (edit)"],
+      "acceptance": [
+        "Ingestion is run against the deployed testnet contract from an empty database until it reaches the tip",
+        "The number of events ingested matches the number of transactions the seed script produced; if not, the discrepancy is investigated and explained rather than accepted",
+        "A sample of reconstructed vaults is cross-checked against the contract's own get_vault via live calls, and the comparison is pasted",
+        "Observed cycle duration and any rate-limiting encountered are recorded",
+        "The run is repeated from empty and produces identical results"
+      ],
+      "nonGoals": ["Not a permanent deployment of the backend."]
+    }
+  ]
+}

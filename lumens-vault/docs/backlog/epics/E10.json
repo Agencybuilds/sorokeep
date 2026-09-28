@@ -1,0 +1,253 @@
+{
+  "epic": "E10",
+  "title": "Backend: Sorokeep Integration",
+  "milestone": "LV3 - Integrations",
+  "issues": [
+    {
+      "id": "E10-01",
+      "title": "Verify the Sorokeep CLI surface against live help output",
+      "labels": ["sorokeep-integration", "devops"],
+      "requirements": ["D-1", "FR-15"],
+      "dependsOn": ["E06-05"],
+      "scope": "Every flag this project plans to use was taken from Sorokeep's README. This project has already been wrong about external tool behaviour more than once, and the README can lag the tool. Check the installed CLI before building anything on top of it.",
+      "files": ["lumens-vault/docs/sorokeep-setup.md (new)"],
+      "acceptance": [
+        "Install Sorokeep and record the exact version used",
+        "Paste real output for `sorokeep --help`, `sorokeep watch --help`, `sorokeep guard --help` and `sorokeep alerts add --help`",
+        "For each flag this project intends to use, confirm it exists with the expected name and note any difference from the README",
+        "Record whether `--storage-keys` exists on watch and what format it expects, since the per-entry monitoring plan depends on it",
+        "Any flag that does not exist is flagged before dependent issues start, not discovered during them"
+      ],
+      "nonGoals": ["No registration yet."]
+    },
+    {
+      "id": "E10-02",
+      "title": "Confirm whether Sorokeep consumes application events",
+      "labels": ["sorokeep-integration"],
+      "requirements": ["FR-15", "FR-18", "NFR-7"],
+      "dependsOn": ["E10-01"],
+      "scope": "The architecture rests on an assumption stated as unconfirmed in both design documents: that Sorokeep reads storage and TTL state directly and does not consume the contract's application events. If that is wrong, the two-separate-data-paths model is wrong, and this backend may be duplicating work Sorokeep already does. Settle it against the actual tool.",
+      "files": ["lumens-vault/docs/sorokeep-setup.md (edit)"],
+      "acceptance": [
+        "The assumption is confirmed or refuted against Sorokeep's actual behaviour and source, not its README",
+        "The evidence is recorded — which commands or code paths were examined",
+        "If confirmed: the two-path model in SYSTEM_DESIGN is marked VERIFIED rather than left as a working assumption",
+        "If refuted: stop and raise it. The overlap between this backend's ingestion and Sorokeep's is then a real design question, not an implementation detail"
+      ],
+      "nonGoals": ["Do not modify Sorokeep."]
+    },
+    {
+      "id": "E10-03",
+      "title": "Register the deployed contract with Sorokeep",
+      "labels": ["sorokeep-integration", "devops"],
+      "requirements": ["FR-15"],
+      "dependsOn": ["E10-01", "E06-05"],
+      "scope": "Put the contract under Sorokeep's monitoring. This is the first moment the two projects actually meet, and the point of building Lumens Vault as a proving ground.",
+      "files": ["lumens-vault/docs/sorokeep-setup.md (edit)"],
+      "acceptance": [
+        "`sorokeep watch` is run against the deployed contract id on testnet with a name, using flags verified in E10-01",
+        "The exact command and its real output are recorded",
+        "`sorokeep status` against the contract shows the discovered entries; paste it",
+        "Record which entries were discovered automatically — the instance and WASM entries are expected — and whether any Vault entries were found without being named explicitly",
+        "The command is reproducible from the doc against a fresh deployment"
+      ],
+      "nonGoals": ["Guard policy is E10-05. Per-entry keys are E10-04."]
+    },
+    {
+      "id": "E10-04",
+      "title": "Determine whether individual Vault entries can be tracked by storage key",
+      "labels": ["sorokeep-integration"],
+      "requirements": ["FR-15", "NFR-5"],
+      "dependsOn": ["E10-03"],
+      "scope": "This is the showcase. Every vault is a separate persistent entry with its own TTL, and a dormant one archives even while the contract is busy — at which point the owner cannot withdraw until it is restored. Whether Sorokeep can guard those individual entries is the question the whole pairing exists to answer.",
+      "files": ["lumens-vault/docs/sorokeep-setup.md (edit)"],
+      "acceptance": [
+        "Establish whether `--storage-keys` accepts the base64 XDR of a `Vault(user, asset, id)` key, and record the format precisely",
+        "Construct the XDR key for a known seeded vault and show how it was derived, so a contributor can reproduce it for any vault",
+        "Register at least one real Vault entry and show `sorokeep status` reporting its TTL",
+        "State plainly whether this scales: vaults are created continuously by users, so if keys must be registered manually per vault, say so and describe what automating it would require",
+        "If it is not supported, record that as the finding and note the consequence for NFR-5 — dormant vaults would have no backstop"
+      ],
+      "nonGoals": ["Not automating registration in this issue."]
+    },
+    {
+      "id": "E10-05",
+      "title": "Configure a guard policy for auto-extension",
+      "labels": ["sorokeep-integration", "devops", "security"],
+      "requirements": ["FR-15", "NFR-5"],
+      "dependsOn": ["E10-03", "E10-01"],
+      "scope": "The guard is what actually prevents archival. This contract will hold real funds, so the policy should lean conservative — extending earlier and more often costs more but the failure it prevents is a user unable to reach their money.",
+      "files": ["lumens-vault/docs/sorokeep-setup.md (edit)"],
+      "acceptance": [
+        "A guard policy is configured with flags verified in E10-01, and the chosen preset or thresholds are justified against this contract's TTL constants from docs/storage-layout.md",
+        "The signing key is supplied by environment variable name only; no secret appears in any file, command history example, or output",
+        "A dry run is performed first and its output recorded before enabling auto-extension",
+        "`sorokeep guard` state is read back and pasted to confirm what was actually stored",
+        "The funding requirement is stated: the guard account pays extension fees, so it needs a balance and someone must watch it"
+      ],
+      "nonGoals": ["No custom extension logic in this project; that is entirely Sorokeep's job."]
+    },
+    {
+      "id": "E10-06",
+      "title": "Observe a real auto-extension and record the evidence",
+      "labels": ["sorokeep-integration", "testing"],
+      "requirements": ["FR-15", "NFR-5"],
+      "dependsOn": ["E10-05"],
+      "scope": "A configured guard is not a working guard. The claim this project makes is that Sorokeep keeps a real contract's storage alive, and that claim needs an observed extension behind it, not a configuration screenshot.",
+      "files": ["lumens-vault/docs/sorokeep-setup.md (edit)"],
+      "acceptance": [
+        "An entry's TTL is observed before and after an auto-extension, with the transaction hash",
+        "If waiting for a natural threshold crossing is impractical, say so and describe what was done instead — a temporarily raised threshold is acceptable if the manipulation is disclosed",
+        "`sorokeep extension history` or the equivalent verified command shows the extension; paste it",
+        "The cost in XLM is recorded, since it is what makes this ongoing rather than free",
+        "If no extension could be observed at all, that is stated plainly rather than implied to have happened"
+      ],
+      "nonGoals": ["Not measuring long-term cost; that is E10-07."]
+    },
+    {
+      "id": "E10-07",
+      "title": "Record the expected TTL maintenance cost at scale",
+      "labels": ["sorokeep-integration", "docs"],
+      "requirements": ["FR-15", "NFR-5"],
+      "dependsOn": ["E10-06"],
+      "scope": "Every vault is a persistent entry needing periodic extension forever. The cost grows with the number of vaults, and nobody has estimated it. A vault product whose upkeep exceeds what it holds is not viable, and that arithmetic should exist before mainnet rather than after.",
+      "files": ["lumens-vault/docs/storage-costs.md (new)"],
+      "acceptance": [
+        "The measured cost of one real extension from E10-06 is the basis, not a theoretical fee estimate",
+        "Annual cost is projected for one hundred, one thousand and ten thousand vaults, with the extension frequency implied by the configured policy stated",
+        "The instance entry's cost is included separately, since it grows with the whitelist",
+        "States who pays and what happens when that account runs dry — the guard stops and entries begin archiving",
+        "Flags whether the projection changes the viability of the current guard policy, and says so directly if it does"
+      ],
+      "nonGoals": ["Not implementing a fee-funding mechanism; FR-6 rules out protocol fees in v1."]
+    },
+    {
+      "id": "E10-08",
+      "title": "Implement webhook signature verification",
+      "labels": ["sorokeep-integration", "backend", "security"],
+      "requirements": ["FR-16", "G-7", "NFR-1"],
+      "dependsOn": ["E07-01", "E07-19"],
+      "scope": "Sorokeep signs webhook payloads with HMAC-SHA256 in an X-Sorokeep-Signature header. Verification uses Sorokeep's own exported verifyWebhookSignature — reimplementing HMAC here is explicitly forbidden and is the mistake the TypeScript backend decision exists to prevent. Note that this is blocked until E07-01 resolves the missing export.",
+      "files": [
+        "lumens-vault/backend/src/adapters/sorokeep-webhook/verify.ts (new)",
+        "lumens-vault/backend/test/adapters/sorokeep-webhook/verify.test.ts (new)"
+      ],
+      "acceptance": [
+        "verifyWebhookSignature is imported from sorokeep; no HMAC implementation exists in this repository",
+        "Verification runs against the raw request body bytes, not a re-serialised object — JSON round-tripping changes bytes and breaks the signature, and this is the most common way such checks silently fail open",
+        "A valid signature passes; a tampered body, a wrong secret, a missing header and a malformed header value all fail",
+        "The secret comes from configuration and never appears in logs or error messages",
+        "A test proves a re-serialised body fails, documenting why raw bytes are required"
+      ],
+      "nonGoals": ["The endpoint is E10-09."]
+    },
+    {
+      "id": "E10-09",
+      "title": "Add the webhook receiver endpoint",
+      "labels": ["sorokeep-integration", "backend"],
+      "requirements": ["FR-16"],
+      "dependsOn": ["E10-08", "E07-13"],
+      "scope": "Expose the HTTP endpoint Sorokeep posts alerts to. It must capture the raw body before any JSON parsing so verification has the exact bytes that were signed.",
+      "files": [
+        "lumens-vault/backend/src/api/webhook.ts (new)",
+        "lumens-vault/backend/test/api/webhook.test.ts (new)"
+      ],
+      "acceptance": [
+        "The route captures the raw body; the framework's JSON body parser must not consume it first, and the PR states how this was ensured",
+        "Unverified requests are rejected with 401 and nothing is stored",
+        "Verified alerts are stored via the repository and the endpoint returns 2xx promptly, so Sorokeep does not treat a slow write as a delivery failure",
+        "Malformed JSON that passes signature verification is handled without crashing the process",
+        "Tests cover valid, invalid signature, missing header, malformed body, and duplicate delivery"
+      ],
+      "nonGoals": ["No retry or replay for missed webhooks."]
+    },
+    {
+      "id": "E10-10",
+      "title": "Parse and store the Sorokeep alert payload",
+      "labels": ["sorokeep-integration", "backend"],
+      "requirements": ["FR-16", "FR-23"],
+      "dependsOn": ["E10-09"],
+      "scope": "Map the verified payload onto the SorokeepAlertRecord the port defines. The payload shape is documented in Sorokeep's README, which E10-01 has already shown is worth checking against reality.",
+      "files": [
+        "lumens-vault/backend/src/adapters/sorokeep-webhook/parse.ts (new)",
+        "lumens-vault/backend/test/adapters/sorokeep-webhook/parse.test.ts (new)"
+      ],
+      "acceptance": [
+        "Every documented field is mapped: type, severity, contractId, contractName, network, entry key, entry type and label, threshold fields, firedAtLedger and timestamp",
+        "Fixtures are captured from a real Sorokeep delivery rather than hand-written from the README; if a real delivery cannot be obtained yet, say so and mark the fixtures provisional",
+        "Both threshold_crossed and alert_resolved parse correctly",
+        "An unexpected or missing field is handled without discarding the alert — store what is present and log what was not, since losing an alert is worse than storing a partial one",
+        "receivedAt is set by this backend, separate from the payload timestamp"
+      ],
+      "nonGoals": ["Display is E16."]
+    },
+    {
+      "id": "E10-11",
+      "title": "Configure Sorokeep to deliver alerts to the endpoint",
+      "labels": ["sorokeep-integration", "devops"],
+      "requirements": ["FR-16"],
+      "dependsOn": ["E10-09", "E10-01"],
+      "scope": "Wire the two together and prove an alert actually arrives. Until a real delivery is observed, the receiver is untested against the real sender regardless of how many unit tests pass.",
+      "files": ["lumens-vault/docs/sorokeep-setup.md (edit)"],
+      "acceptance": [
+        "`sorokeep alerts add` is configured with the webhook URL and a shared secret, using flags verified in E10-01",
+        "The secret is generated securely, supplied by environment variable, and appears in no file",
+        "`sorokeep alerts test` or the verified equivalent delivers a real alert to the running backend; paste both sides — Sorokeep's output and the backend's log",
+        "The delivered alert is confirmed stored in the database",
+        "A deliberately wrong secret is tried once and confirmed rejected with 401, proving verification is actually enforced end to end"
+      ],
+      "nonGoals": ["Not exposing the endpoint publicly; local tunnelling for testing is fine and should be documented."]
+    },
+    {
+      "id": "E10-12",
+      "title": "Decide the Operations page data source beyond webhooks",
+      "labels": ["sorokeep-integration"],
+      "requirements": ["D-4", "FR-23"],
+      "dependsOn": ["E10-03", "E10-06"],
+      "scope": "Webhooks deliver alerts as they fire, but the Operations page also needs current state — TTL per entry, guard configuration, extension history, costs. Three options exist and each couples the two projects differently. Decide before E16 builds against one.",
+      "files": ["lumens-vault/docs/adr/0013-operations-data-source.md (new)"],
+      "acceptance": [
+        "The three options are compared: Sorokeep's --json CLI output, reading its SQLite database directly, and its MCP server",
+        "For each: what it couples, whether it survives Sorokeep running on a different host, and how it fails",
+        "Note that reading Sorokeep's database directly couples deployment topology and writes are forbidden, and that MCP is designed for AI agents rather than application backends",
+        "A decision is recorded with reasoning",
+        "The chosen mechanism is demonstrated once against the live Sorokeep instance, with output"
+      ],
+      "nonGoals": ["No implementation; that is E12-13."]
+    },
+    {
+      "id": "E10-13",
+      "title": "Document the complete Sorokeep setup for a fresh deployment",
+      "labels": ["sorokeep-integration", "docs"],
+      "requirements": ["FR-15", "FR-16"],
+      "dependsOn": ["E10-05", "E10-11", "E10-12"],
+      "scope": "Consolidate everything into one reproducible procedure. A fresh contract deployment invalidates the registration, and whoever does that next should not have to rediscover any of this.",
+      "files": ["lumens-vault/docs/sorokeep-setup.md (edit)"],
+      "acceptance": [
+        "Ordered steps from installing Sorokeep to a verified alert delivery",
+        "Every command is one that was actually run, with its real output, and the Sorokeep version stated",
+        "Environment variables are listed by name with what each is for; no values",
+        "Records what must be redone after a contract redeploy, cross-referencing docs/redeploy.md",
+        "States which parts remain unverified, if any, rather than presenting the whole as proven"
+      ],
+      "nonGoals": ["Not duplicating Sorokeep's own documentation; link to it."]
+    },
+    {
+      "id": "E10-14",
+      "title": "Write up what this integration demonstrated about TTL management",
+      "labels": ["sorokeep-integration", "docs"],
+      "requirements": ["FR-15", "NFR-5", "NFR-7"],
+      "dependsOn": ["E10-06", "E10-07", "E10-04"],
+      "scope": "Lumens Vault exists partly to be a real proving ground for Sorokeep. That is only worth something if the findings are written down — including the ones that did not work, which are usually the informative ones.",
+      "files": ["lumens-vault/docs/ttl-findings.md (new)"],
+      "acceptance": [
+        "States what was actually demonstrated, with evidence: entries discovered, extensions observed, costs measured",
+        "States what could not be demonstrated and why — particularly per-entry Vault tracking if E10-04 found it impractical",
+        "Records any friction found in Sorokeep itself as concrete, actionable feedback rather than general impressions",
+        "Assesses honestly whether Sorokeep's guard is sufficient backstop for this contract's dormant-vault problem, and says so if it is not",
+        "Distinguishes throughout between what was observed and what is expected"
+      ],
+      "nonGoals": ["Not marketing copy. A negative finding is a valid outcome and must not be softened."]
+    }
+  ]
+}

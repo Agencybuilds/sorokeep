@@ -1,0 +1,257 @@
+{
+  "epic": "E02",
+  "title": "Contract: Lock Periods & Configuration",
+  "milestone": "LV1 - Contract",
+  "issues": [
+    {
+      "id": "E02-01",
+      "title": "Confirm nothing is deployed before changing VaultConfigV1 in place",
+      "labels": ["contract", "security"],
+      "requirements": ["FR-2", "NFR-7"],
+      "dependsOn": ["E01-14"],
+      "scope": "The whole lock-period change edits VaultConfigV1 in place rather than adding a V2 variant. That is only safe while no instance of this contract exists anywhere holding data in the old shape. Establish and record that fact before any storage change lands, because reversing it after a deployment means a migration.",
+      "files": ["lumens-vault/docs/adr/0002-config-v1-in-place.md (new)"],
+      "acceptance": [
+        "The maintainer confirms in the issue thread that the contract has never been deployed to testnet or mainnet",
+        "An ADR records the confirmation, the date, and the consequence: if this turns out to be wrong, VaultConfig::V2 must be added instead of editing V1",
+        "The ADR states the rule for the future — once anything is deployed, V1 shapes are frozen and later versions add variants"
+      ],
+      "nonGoals": ["No code changes."]
+    },
+    {
+      "id": "E02-02",
+      "title": "Replace VaultConfigV1's single lock field with min and max bounds",
+      "labels": ["contract", "breaking-change"],
+      "requirements": ["FR-2"],
+      "dependsOn": ["E02-01"],
+      "scope": "VaultConfigV1 currently holds default_timelock_ledgers, a single admin-set default. The decided design is global bounds with a per-deposit choice inside them, so the field is replaced by min_lock_ledgers and max_lock_ledgers. This issue changes only the struct; callers are updated in the issues that own them.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/storage.rs (edit)"],
+      "acceptance": [
+        "VaultConfigV1 holds `min_lock_ledgers: u32` and `max_lock_ledgers: u32`; default_timelock_ledgers no longer exists",
+        "The VaultConfig enum still wraps it as V1 — no new variant, per E02-01's finding",
+        "`cargo check` shows the expected compile errors at each call site, and the PR lists them so the follow-up issues have a checklist"
+      ],
+      "nonGoals": ["Does not update contract.rs or test.rs; those are E02-03 through E02-06. The crate will not compile until they land."]
+    },
+    {
+      "id": "E02-03",
+      "title": "Validate lock bounds in __constructor",
+      "labels": ["contract", "breaking-change"],
+      "requirements": ["FR-2", "FR-9"],
+      "dependsOn": ["E02-02"],
+      "scope": "The constructor takes the initial config. It must reject nonsensical bounds at deploy time, because a contract deployed with max below min can never accept a deposit and the only fix is an upgrade.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/contract.rs (edit)"],
+      "acceptance": [
+        "Signature becomes `__constructor(env, admin: Address, min_lock_ledgers: u32, max_lock_ledgers: u32)`",
+        "Rejects `min == 0` and rejects `max < min`",
+        "The rejection mechanism is chosen by compiling both options against soroban-sdk 28 — a Result-returning constructor and panic_with_error! — and the PR records which compiles, which was chosen, and why. Do not assume a constructor can return Result",
+        "admin.require_auth() is still called, unchanged"
+      ],
+      "nonGoals": ["Does not touch deposit or update_config."]
+    },
+    {
+      "id": "E02-04",
+      "title": "Add the required lock_ledgers parameter to deposit",
+      "labels": ["contract", "breaking-change"],
+      "requirements": ["FR-2"],
+      "dependsOn": ["E02-02"],
+      "scope": "deposit currently reads a single default from config and derives unlock_ledger from it. The decided design makes the caller choose per deposit, always — there is no default fallback path.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/contract.rs (edit)"],
+      "acceptance": [
+        "Signature becomes `deposit(env, from, asset, amount, lock_ledgers: u32) -> Result<u32, Error>`",
+        "lock_ledgers is required; there is no overload or Option that falls back to a default",
+        "unlock_ledger is derived from the caller's lock_ledgers, not from config",
+        "Validation against the configured bounds is E02-05; this issue only threads the parameter through"
+      ],
+      "nonGoals": ["No range validation here. No frontend picker — that is E15."]
+    },
+    {
+      "id": "E02-05",
+      "title": "Reject out-of-range lock periods with a new InvalidLockPeriod error",
+      "labels": ["contract"],
+      "requirements": ["FR-2"],
+      "dependsOn": ["E02-04"],
+      "scope": "With lock_ledgers caller-supplied, deposit must enforce the admin's configured bounds or the bounds mean nothing.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/contract.rs (edit)"],
+      "acceptance": [
+        "`Error::InvalidLockPeriod = 8` is appended to the enum — existing codes keep their numbers, because renumbering a shipped error code changes its meaning to any client that already decoded it",
+        "deposit returns InvalidLockPeriod when lock_ledgers is below min_lock_ledgers or above max_lock_ledgers",
+        "Both boundary values are accepted — the range is inclusive at both ends, and the PR states this explicitly since it is the kind of detail that silently differs between the contract and the UI"
+      ],
+      "nonGoals": ["Boundary tests are E05-04."]
+    },
+    {
+      "id": "E02-06",
+      "title": "Use checked arithmetic for unlock_ledger",
+      "labels": ["contract", "security"],
+      "requirements": ["FR-2", "G-13"],
+      "dependsOn": ["E02-04"],
+      "scope": "unlock_ledger is computed as `env.ledger().sequence() + lock_ledgers`, an unchecked u32 addition. The release profile sets overflow-checks = true so it traps rather than wraps, but a trap is a panic with no useful error — a large lock_ledgers should be a clean rejection.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/contract.rs (edit)"],
+      "acceptance": [
+        "The addition uses checked_add and returns an error rather than trapping",
+        "The error variant used is stated and justified — either InvalidLockPeriod reused, or a new appended variant",
+        "A test deposits with a lock_ledgers large enough to overflow from the current sequence and asserts a clean error, not a panic"
+      ],
+      "nonGoals": ["The vault-id counter overflow is E02-07."]
+    },
+    {
+      "id": "E02-07",
+      "title": "Use checked arithmetic for the per-user vault id counter",
+      "labels": ["contract", "security"],
+      "requirements": ["G-13", "FR-4"],
+      "dependsOn": ["E02-01"],
+      "scope": "deposit computes `current_count + 1` unchecked. This is far less reachable than the unlock_ledger case — it needs u32::MAX deposits by one user — but it is the same class of defect and the fix is two lines.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/contract.rs (edit)"],
+      "acceptance": [
+        "The increment uses checked_add and returns an error on overflow rather than trapping",
+        "The PR states which error variant is returned and why",
+        "A unit test sets UserVaultCount to u32::MAX directly via env.as_contract and asserts the next deposit fails cleanly"
+      ],
+      "nonGoals": ["Not changing how vault ids are allocated."]
+    },
+    {
+      "id": "E02-08",
+      "title": "Apply bounds validation in update_config",
+      "labels": ["contract"],
+      "requirements": ["FR-13", "FR-2"],
+      "dependsOn": ["E02-02", "E02-03"],
+      "scope": "update_config lets the admin change lock bounds without an upgrade. It must apply exactly the same validation the constructor does, or the admin can put the contract into a state the constructor would have refused.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/contract.rs (edit)"],
+      "acceptance": [
+        "Signature becomes `update_config(env, min_lock_ledgers: u32, max_lock_ledgers: u32) -> Result<(), Error>`",
+        "Rejects min == 0 and max < min, with the same error the constructor uses",
+        "The validation is shared with the constructor rather than duplicated, so the two cannot drift apart",
+        "Existing vaults are unaffected by a bounds change — their unlock_ledger was fixed at deposit time. State this in a code comment; it is the obvious question a reader will have"
+      ],
+      "nonGoals": ["The ConfigUpdatedEvent is E02-09."]
+    },
+    {
+      "id": "E02-09",
+      "title": "Emit ConfigUpdatedEvent so the backend can observe bounds changes",
+      "labels": ["contract"],
+      "requirements": ["FR-13", "FR-18"],
+      "dependsOn": ["E02-08"],
+      "scope": "update_config currently emits nothing, so an off-chain reader has no way to learn the bounds changed and the frontend's picker would silently use stale limits until something else forced a refresh.",
+      "files": [
+        "lumens-vault/contracts/lumens-vault/src/events.rs (edit)",
+        "lumens-vault/contracts/lumens-vault/src/contract.rs (edit)"
+      ],
+      "acceptance": [
+        "ConfigUpdatedEvent has admin as its only #[topic]; min_lock_ledgers and max_lock_ledgers are data fields",
+        "update_config publishes it after a successful write",
+        "Topic count stays within the 4-topic ceiling — verified by the event topic test in E05-08, referenced here"
+      ],
+      "nonGoals": ["Backend handling of this event is E09-08."]
+    },
+    {
+      "id": "E02-10",
+      "title": "Add a get_lock_bounds view so clients can read live limits",
+      "labels": ["contract"],
+      "requirements": ["FR-2", "FR-21", "NFR-6"],
+      "dependsOn": ["E02-02"],
+      "scope": "The contract has no config getter at all. FR-21 requires the deposit form's lock-period picker to read live bounds rather than hardcoding them, and without this view that is impossible.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/contract.rs (edit)"],
+      "acceptance": [
+        "`get_lock_bounds(env) -> Result<(u32, u32), Error>` returns (min, max) from stored config",
+        "Returns the same values a subsequent deposit validates against — assert this in a test rather than eyeballing it",
+        "The return shape is documented in the PR, since the frontend will bind to it"
+      ],
+      "nonGoals": ["No enumeration view. NFR-6 keeps this to point lookups."]
+    },
+    {
+      "id": "E02-11",
+      "title": "Update every existing test call site for the new signatures",
+      "labels": ["contract", "testing"],
+      "requirements": ["FR-2"],
+      "dependsOn": ["E02-03", "E02-04"],
+      "scope": "The five existing tests call setup() and deposit() with the old signatures. Until they are updated the crate does not compile, so this issue is what makes the E02 series green again.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "The setup() helper passes min and max bounds instead of a single default",
+        "Every deposit call passes an explicit lock_ledgers inside the configured bounds",
+        "All 5 existing tests pass unchanged in intent — this is a mechanical update, not a rewrite",
+        "`cargo test` output in the PR shows 5/5",
+        "`stellar contract build` succeeds"
+      ],
+      "nonGoals": ["No new test cases here — those are E05."]
+    },
+    {
+      "id": "E02-12",
+      "title": "Keep the v2 fixture's config shape compatible with the upgrade test",
+      "labels": ["contract", "testing"],
+      "requirements": ["FR-14", "FR-2"],
+      "dependsOn": ["E02-02"],
+      "scope": "The fixture crate mirrors the real contract's storage types so the cross-binary upgrade test can read V1 data through the new binary. Its VaultConfigV1 still carries default_timelock_ledgers. Whether that matters depends on whether the fixture actually reads config — establish that first rather than changing it reflexively.",
+      "files": ["lumens-vault/contracts/lumens-vault-v2-fixture/src/storage.rs (edit, if needed)"],
+      "acceptance": [
+        "Determine and state whether the fixture reads DataKey::Config at all — if it does not, no change is needed and the PR says so with the evidence",
+        "If a change is needed, VaultConfigV1 is updated to match the real contract byte-for-byte",
+        "The fixture rebuilds with `stellar contract build`",
+        "`test_real_upgrade_and_state_migration` still passes after rebuilding the fixture and rerunning `cargo test`"
+      ],
+      "nonGoals": ["Do not add features to the fixture. It exists only to prove the upgrade path."]
+    },
+    {
+      "id": "E02-13",
+      "title": "Document the lock-period model in TECH_SPEC",
+      "labels": ["docs"],
+      "requirements": ["FR-2", "NFR-7"],
+      "dependsOn": ["E02-05", "E02-08"],
+      "scope": "Record the shipped behaviour so the next reader does not have to derive it from code: bounds are global, inclusive at both ends, required per deposit, changeable by the admin without affecting existing vaults.",
+      "files": ["lumens-vault/docs/TECH_SPEC.md (edit)"],
+      "acceptance": [
+        "FR-2 describes the shipped model including range inclusivity and the no-retroactive-effect rule",
+        "The error returned for an out-of-range period is named",
+        "Status tag updated from DECIDED to VERIFIED, since it is now implemented and tested"
+      ],
+      "nonGoals": ["No other requirement edited."]
+    },
+    {
+      "id": "E02-14",
+      "title": "Decide whether lock bounds should ever be per-asset",
+      "labels": ["docs"],
+      "requirements": ["FR-2", "NFR-7"],
+      "dependsOn": ["E02-13"],
+      "scope": "Bounds are global for v1. That was decided quickly and the reasoning was never written down. A volatile asset and a stablecoin plausibly want different minimums, so record why global is right for now and what would trigger revisiting it.",
+      "files": ["lumens-vault/docs/adr/0003-global-lock-bounds.md (new)"],
+      "acceptance": [
+        "The ADR states the decision, the reasoning, and the concrete signal that would justify per-asset bounds later",
+        "It notes what the migration would cost — a config shape change and therefore a VaultConfig::V2 once deployed",
+        "It records the counter-argument rather than only the chosen position: a volatile asset and a stablecoin plausibly warrant different minimums, and the ADR says why that is not yet worth the complexity"
+      ],
+      "nonGoals": ["No implementation of per-asset bounds."]
+    },
+    {
+      "id": "E02-15",
+      "title": "Verify the constructor argument flag spelling against the live CLI",
+      "labels": ["devops", "docs"],
+      "requirements": ["D-6", "FR-9"],
+      "dependsOn": ["E02-03"],
+      "scope": "Deploy tooling must pass admin, min_lock_ledgers and max_lock_ledgers as constructor arguments. Whether the CLI expects kebab-case or snake-case for those flags has been written down both ways in this project's documents and never checked. Check it.",
+      "files": ["lumens-vault/docs/deploy.md (new)"],
+      "acceptance": [
+        "Run `stellar contract deploy --help` and the `-- --help` form against the built wasm; paste both outputs",
+        "The verified spelling is recorded, with the stellar-cli version it was verified against, because this could change between versions",
+        "A worked example command line appears in the doc"
+      ],
+      "nonGoals": ["The deploy script itself is E06-02."]
+    },
+    {
+      "id": "E02-16",
+      "title": "Record the exported contract interface after the lock-period change",
+      "labels": ["contract", "docs"],
+      "requirements": ["FR-2", "NFR-7"],
+      "dependsOn": ["E02-11", "E02-10"],
+      "scope": "The wasm's exported function list is the real interface every client binds to. Capture it once the E02 changes land so the frontend and backend have an authoritative reference and any accidental removal is visible in a later diff.",
+      "files": ["lumens-vault/docs/contract-interface.md (new)"],
+      "acceptance": [
+        "`stellar contract build` output listing exported functions is pasted, with the wasm hash and size",
+        "Each exported function is documented with its arguments, return type and error variants",
+        "get_lock_bounds and the new deposit signature appear",
+        "The doc states which wasm hash it describes, so staleness is detectable"
+      ],
+      "nonGoals": ["Not a generated-docs pipeline; a hand-written reference is enough at this size."]
+    }
+  ]
+}

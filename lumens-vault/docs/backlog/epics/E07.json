@@ -1,0 +1,425 @@
+{
+  "epic": "E07",
+  "title": "Backend: Foundation, Config & Persistence",
+  "milestone": "LV2 - Deploy & Backend Core",
+  "issues": [
+    {
+      "id": "E07-01",
+      "title": "Resolve how the backend depends on sorokeep for verifyWebhookSignature",
+      "labels": ["backend", "blocked-external", "security"],
+      "requirements": ["G-7", "D-10", "FR-16"],
+      "dependsOn": ["E01-14"],
+      "scope": "The published sorokeep@1.0.0 does not export verifyWebhookSignature. Verified by unpacking the tarball: dist/lib.d.ts exports only watchContract, runMonitorCycle, inspectContract, parseSacBalance, buildSacBalanceKeyXdr, formatTokenBalance and AWSSecretsResolver. The export exists only on the parent repo's main branch, added in commit 34148c8. Since FR-16 and the entire stated reason for a TypeScript backend rest on importing it natively, this must be resolved before E10 can compile. Reimplementing HMAC verification locally is explicitly the wrong answer — that is the mistake the TypeScript decision exists to avoid.",
+      "files": ["lumens-vault/docs/adr/0010-sorokeep-dependency.md (new)"],
+      "acceptance": [
+        "Re-verify the published package before acting; it may have been republished since the audit. Run `npm view sorokeep version` and inspect the tarball's lib.d.ts, and paste both",
+        "Pick one path and record it: request a sorokeep release with a version bump, depend on the git ref until one exists, or vendor nothing and block E10",
+        "If depending on a git ref, the exact ref is pinned, not a branch name, and the ADR states the condition for switching to a published version",
+        "Whatever is chosen, prove it: install it in a scratch project and successfully import verifyWebhookSignature, pasting the output",
+        "The ADR names who owns getting a release published, since that is outside this repository's folder"
+      ],
+      "nonGoals": ["Do not reimplement HMAC verification in this project under any circumstances."]
+    },
+    {
+      "id": "E07-02",
+      "title": "Scaffold the backend package with TypeScript and vitest",
+      "labels": ["backend", "scaffolding"],
+      "requirements": ["NFR-4"],
+      "dependsOn": ["E01-14"],
+      "scope": "Create the backend package skeleton: package.json, tsconfig, vitest config, gitignore. No business logic. This is the container the rest of the backend epics fill.",
+      "files": [
+        "lumens-vault/backend/package.json (new)",
+        "lumens-vault/backend/tsconfig.json (new)",
+        "lumens-vault/backend/vitest.config.ts (new)",
+        "lumens-vault/backend/.gitignore (new)"
+      ],
+      "acceptance": [
+        "Node 22 or later is declared in engines, because sorokeep requires it",
+        "TypeScript is configured strict, with NodeNext module resolution — the provided port interfaces use .js extensions in their imports and will not resolve otherwise",
+        "vitest is the test framework, matching sorokeep's choice rather than introducing a second one",
+        "`npm install`, `npm run typecheck` and `npm test` all succeed on an empty project; paste the output",
+        ".gitignore excludes node_modules, dist and any local database file",
+        "`git status` confirms nothing outside lumens-vault/backend/ changed"
+      ],
+      "nonGoals": ["No dependencies beyond what SCAFFOLD_BRIEF lists. No source files yet."]
+    },
+    {
+      "id": "E07-03",
+      "title": "Build the configuration module with fail-fast validation",
+      "labels": ["backend"],
+      "requirements": ["G-16", "NFR-4"],
+      "dependsOn": ["E07-02"],
+      "scope": "The backend needs an RPC URL, network passphrase, contract id, database path, webhook secret, Reflector contract id and a port. None may be hardcoded and none may silently default to something wrong — a missing contract id that falls back to a placeholder produces an empty dashboard rather than an error, which is the worst failure mode.",
+      "files": [
+        "lumens-vault/backend/src/config.ts (new)",
+        "lumens-vault/backend/.env.example (new)",
+        "lumens-vault/backend/test/config.test.ts (new)"
+      ],
+      "acceptance": [
+        "Every setting is read from the environment and validated at startup",
+        "A missing or malformed required value exits with a message naming the variable, rather than starting in a broken state",
+        "The contract id is validated for shape before use",
+        "The webhook secret is never logged, and a test asserts it does not appear in the config object's string representation",
+        ".env.example lists every variable with a comment, and no real value",
+        "Tests cover: all present, one missing, one malformed"
+      ],
+      "nonGoals": ["No secret manager integration."]
+    },
+    {
+      "id": "E07-04",
+      "title": "Install the four port interfaces into the backend",
+      "labels": ["backend"],
+      "requirements": ["G-4", "NFR-4"],
+      "dependsOn": ["E07-02", "E01-05"],
+      "scope": "The four interfaces staged by E01-05 are complete and type-check. Move them into place unchanged. They are the contract every adapter implements, so edits here ripple widely and should be separate, justified issues rather than incidental.",
+      "files": [
+        "lumens-vault/backend/src/ports/event-source.ts (new)",
+        "lumens-vault/backend/src/ports/price-oracle.ts (new)",
+        "lumens-vault/backend/src/ports/alert-sink.ts (new)",
+        "lumens-vault/backend/src/ports/persistence.ts (new)"
+      ],
+      "acceptance": [
+        "All four files match the staged versions byte for byte; show a diff proving it",
+        "`npm run typecheck` passes with zero errors",
+        "The staging directory from E01-05 is removed",
+        "Any change deemed necessary is raised as its own issue rather than made here — state in the PR that none was made, or which issue was opened"
+      ],
+      "nonGoals": ["No adapters yet."]
+    },
+    {
+      "id": "E07-05",
+      "title": "Design the SQLite schema for the display cache",
+      "labels": ["backend"],
+      "requirements": ["NFR-4", "FR-17", "FR-18"],
+      "dependsOn": ["E07-04"],
+      "scope": "The persistence port implies seven entities: cursor, events, vaults, whitelist, admin actions, sorokeep alerts and price cache. Design the tables before writing code, because getting amount storage wrong is expensive to discover later.",
+      "files": ["lumens-vault/docs/backend-schema.md (new)"],
+      "acceptance": [
+        "Every table, column, type, primary key and index is specified",
+        "i128 amounts are stored as TEXT, never as a SQL numeric type or a JS number — state the precision-loss reasoning in the doc",
+        "The events table's primary key is the RPC event id, which is what makes ingestion idempotent",
+        "Each table maps explicitly to the port interface type it serves",
+        "States plainly that this database is a rebuildable cache: deleting it and re-ingesting must produce the same result, which is what NFR-4 allows"
+      ],
+      "nonGoals": ["No Postgres or Redis; both are ruled out. Do not create tables that mirror Sorokeep's own."]
+    },
+    {
+      "id": "E07-06",
+      "title": "Implement the schema and a migration runner",
+      "labels": ["backend"],
+      "requirements": ["NFR-4"],
+      "dependsOn": ["E07-05"],
+      "scope": "Create the tables from E07-05 and a minimal, ordered migration mechanism so the schema can evolve without manual intervention on a developer's machine.",
+      "files": [
+        "lumens-vault/backend/src/adapters/sqlite/schema.sql (new)",
+        "lumens-vault/backend/src/adapters/sqlite/migrations.ts (new)",
+        "lumens-vault/backend/test/adapters/sqlite/migrations.test.ts (new)"
+      ],
+      "acceptance": [
+        "Migrations are numbered, applied in order, and recorded so they run exactly once",
+        "Running the runner twice is a no-op; a test proves it",
+        "A test creates a fresh in-memory database, runs migrations, and asserts every expected table and index exists",
+        "The runner refuses to start against a database whose recorded version is ahead of the code, rather than corrupting it"
+      ],
+      "nonGoals": ["No down-migrations; the cache is rebuildable."]
+    },
+    {
+      "id": "E07-07",
+      "title": "Implement event persistence with idempotent inserts",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "NFR-4"],
+      "dependsOn": ["E07-06"],
+      "scope": "saveEvents must be idempotent by event id and return how many rows were genuinely new. Overlapping poll windows and retried requests will deliver the same event repeatedly, and double-counting a deposit would corrupt every derived balance.",
+      "files": [
+        "lumens-vault/backend/src/adapters/sqlite/events.ts (new)",
+        "lumens-vault/backend/test/adapters/sqlite/events.test.ts (new)"
+      ],
+      "acceptance": [
+        "saveEvents inserts new events and ignores ones already present, returning the count actually inserted",
+        "A test saves the same batch twice and asserts the second call returns zero and the row count is unchanged",
+        "A test saves a batch containing both new and duplicate events and asserts only the new ones land",
+        "Amounts round-trip exactly as bigint through TEXT storage, including a value beyond Number.MAX_SAFE_INTEGER — this is the assertion that catches a number conversion slipping in"
+      ],
+      "nonGoals": ["No reorg handling; Stellar has immediate finality and rollback logic must not be built."]
+    },
+    {
+      "id": "E07-08",
+      "title": "Implement cursor persistence for ingestion progress",
+      "labels": ["backend"],
+      "requirements": ["FR-17"],
+      "dependsOn": ["E07-06"],
+      "scope": "The cursor records how far ingestion has progressed. If it advances past events that were not durably stored, those events are lost silently — so the cursor and the events it covers must move together.",
+      "files": [
+        "lumens-vault/backend/src/adapters/sqlite/cursor.ts (new)",
+        "lumens-vault/backend/test/adapters/sqlite/cursor.test.ts (new)"
+      ],
+      "acceptance": [
+        "getCursor and setCursor implement the port's IngestionCursor contract",
+        "getCursor returns null for a contract never ingested, and callers must handle that as a cold start rather than treating it as ledger zero",
+        "Cursors are keyed by contract id, so pointing the backend at a redeployed contract starts clean instead of resuming from a foreign position",
+        "A test asserts the cursor survives a reopened database connection"
+      ],
+      "nonGoals": ["Polling logic is E08."]
+    },
+    {
+      "id": "E07-09",
+      "title": "Implement transactional writes across the repository",
+      "labels": ["backend"],
+      "requirements": ["NFR-4", "FR-17"],
+      "dependsOn": ["E07-07", "E07-08"],
+      "scope": "runInTransaction exists on the port because one ingestion step writes events, updates vaults and advances the cursor, and a crash between those leaves the cache inconsistent. Better-sqlite3 is synchronous, which makes this simpler than it looks, but the port exposes an async signature and the two must be reconciled deliberately.",
+      "files": [
+        "lumens-vault/backend/src/adapters/sqlite/transaction.ts (new)",
+        "lumens-vault/backend/test/adapters/sqlite/transaction.test.ts (new)"
+      ],
+      "acceptance": [
+        "runInTransaction commits on success and rolls back on a thrown error",
+        "A test writes events and advances the cursor inside a transaction, throws partway, and asserts neither landed",
+        "How the synchronous driver is reconciled with the async port signature is explained in a comment, since the mismatch will confuse the next reader",
+        "Nesting behaviour is defined and tested, or explicitly rejected with a clear error"
+      ],
+      "nonGoals": ["No connection pooling; SQLite with one process does not need it."]
+    },
+    {
+      "id": "E07-10",
+      "title": "Implement vault record persistence",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "FR-22"],
+      "dependsOn": ["E07-06"],
+      "scope": "The vaults table is the reconstructed read model the frontend's vault list reads. Upserts are keyed on user, asset and vault id together.",
+      "files": [
+        "lumens-vault/backend/src/adapters/sqlite/vaults.ts (new)",
+        "lumens-vault/backend/test/adapters/sqlite/vaults.test.ts (new)"
+      ],
+      "acceptance": [
+        "upsertVault, getVault and getVaultsByUser implement the port contract",
+        "The composite key is enforced by the schema, so the same vault cannot be duplicated",
+        "Balances round-trip exactly as bigint",
+        "getVaultsByUser returns an empty array, never null, for an unknown user",
+        "A test covers a user holding vaults in several assets and asserts they all come back"
+      ],
+      "nonGoals": ["Reconstruction logic is E09."]
+    },
+    {
+      "id": "E07-11",
+      "title": "Implement whitelist state persistence",
+      "labels": ["backend"],
+      "requirements": ["FR-11", "FR-17"],
+      "dependsOn": ["E07-06"],
+      "scope": "The contract has no whitelist enumeration, so the current set is derived from Whitelist and Delist events and cached here. The deposit form's asset dropdown reads it.",
+      "files": [
+        "lumens-vault/backend/src/adapters/sqlite/whitelist.ts (new)",
+        "lumens-vault/backend/test/adapters/sqlite/whitelist.test.ts (new)"
+      ],
+      "acceptance": [
+        "setWhitelisted and getWhitelist implement the port contract",
+        "An asset whitelisted, delisted and whitelisted again ends in the correct final state — assert the whole sequence, since last-write-wins is the property that matters",
+        "updatedLedger is stored so out-of-order processing can be detected",
+        "getWhitelist returns delisted assets with isWhitelisted false rather than omitting them, so the UI can distinguish delisted from never-listed"
+      ],
+      "nonGoals": ["Derivation from events is E09-07."]
+    },
+    {
+      "id": "E07-12",
+      "title": "Implement admin action persistence",
+      "labels": ["backend"],
+      "requirements": ["FR-18"],
+      "dependsOn": ["E07-06"],
+      "scope": "Admin actions are the only place pause, upgrade, whitelist changes and admin transfers are surfaced anywhere in the system — Sorokeep has no concept of them. Storage is keyed by event id so replays are idempotent.",
+      "files": [
+        "lumens-vault/backend/src/adapters/sqlite/admin-actions.ts (new)",
+        "lumens-vault/backend/test/adapters/sqlite/admin-actions.test.ts (new)"
+      ],
+      "acceptance": [
+        "saveAdminAction and listAdminActions implement the port contract",
+        "Saving the same event id twice does not duplicate the row",
+        "listAdminActions returns newest first and honours its limit",
+        "Every AdminActionType from the port is storable and retrievable; a test covers all of them so a new action type cannot be silently unsupported"
+      ],
+      "nonGoals": ["Detection is E09-08. Alerting is E09-09."]
+    },
+    {
+      "id": "E07-13",
+      "title": "Implement Sorokeep alert persistence",
+      "labels": ["backend", "sorokeep-integration"],
+      "requirements": ["FR-16", "FR-23"],
+      "dependsOn": ["E07-06"],
+      "scope": "Verified webhook payloads are stored here and the Operations page reads them. The record shape mirrors Sorokeep's documented payload.",
+      "files": [
+        "lumens-vault/backend/src/adapters/sqlite/sorokeep-alerts.ts (new)",
+        "lumens-vault/backend/test/adapters/sqlite/sorokeep-alerts.test.ts (new)"
+      ],
+      "acceptance": [
+        "saveSorokeepAlert and listSorokeepAlerts implement the port contract",
+        "Both documented alert types, threshold_crossed and alert_resolved, are storable, and a test pairs a crossing with its later resolution",
+        "listSorokeepAlerts filters by contract id and returns newest first",
+        "receivedAt is recorded separately from the payload's own timestamp, so clock differences between Sorokeep and this backend are visible rather than conflated"
+      ],
+      "nonGoals": ["Signature verification is E10-08."]
+    },
+    {
+      "id": "E07-14",
+      "title": "Implement price cache persistence",
+      "labels": ["backend"],
+      "requirements": ["FR-19"],
+      "dependsOn": ["E07-06"],
+      "scope": "Reflector readings are cached with an explicit status so the UI can distinguish a fresh price from a stale one, a deviant one, or none at all. The status is as important as the number.",
+      "files": [
+        "lumens-vault/backend/src/adapters/sqlite/price-cache.ts (new)",
+        "lumens-vault/backend/test/adapters/sqlite/price-cache.test.ts (new)"
+      ],
+      "acceptance": [
+        "savePrice and getPrice implement the port contract",
+        "All four statuses round-trip: fresh, stale, deviant, unavailable",
+        "A reading may be null while the status is unavailable; a test covers that combination explicitly, since it is the case a naive implementation drops",
+        "Price values round-trip exactly as bigint alongside their decimals — a price is meaningless without its scale"
+      ],
+      "nonGoals": ["Reflector integration and the guards are E11."]
+    },
+    {
+      "id": "E07-15",
+      "title": "Assemble the SQLite adapter behind the repository port",
+      "labels": ["backend"],
+      "requirements": ["NFR-4"],
+      "dependsOn": ["E07-07", "E07-08", "E07-09", "E07-10", "E07-11", "E07-12", "E07-13", "E07-14"],
+      "scope": "Compose the per-entity modules into one class implementing IVaultRepository, so the rest of the backend depends only on the port.",
+      "files": [
+        "lumens-vault/backend/src/adapters/sqlite/index.ts (new)",
+        "lumens-vault/backend/test/adapters/sqlite/index.test.ts (new)"
+      ],
+      "acceptance": [
+        "The class implements every IVaultRepository method with no remaining stubs; typecheck proves completeness",
+        "It accepts a database path from configuration and supports an in-memory database for tests",
+        "Migrations run automatically on construction",
+        "An integration test exercises a realistic sequence — save events, upsert vaults, advance the cursor, read back — inside one transaction",
+        "No other module imports anything from adapters/sqlite/ directly; they import the port. State how this was checked"
+      ],
+      "nonGoals": ["No second persistence implementation."]
+    },
+    {
+      "id": "E07-16",
+      "title": "Add structured logging",
+      "labels": ["backend"],
+      "requirements": ["G-24"],
+      "dependsOn": ["E07-03"],
+      "scope": "Ingestion runs unattended on a timer. Without structured logs, diagnosing why the dashboard is stale means guessing. The project that this one exists to showcase is a monitoring tool, so its own operability should not be an afterthought.",
+      "files": [
+        "lumens-vault/backend/src/logging.ts (new)",
+        "lumens-vault/backend/test/logging.test.ts (new)"
+      ],
+      "acceptance": [
+        "Logs carry a level, a timestamp and a component field, and are JSON when not attached to a terminal",
+        "Log level is configurable and defaults to info",
+        "A test asserts the webhook secret and any configured key material never appear in output, even when the whole config object is logged",
+        "One example log line from each level appears in the PR"
+      ],
+      "nonGoals": ["No external log shipping."]
+    },
+    {
+      "id": "E07-17",
+      "title": "Define the backend error taxonomy",
+      "labels": ["backend"],
+      "requirements": ["G-24", "NFR-4"],
+      "dependsOn": ["E07-16"],
+      "scope": "Distinguish errors that mean the cache is temporarily behind — an RPC timeout, a rate limit — from errors that mean something is genuinely wrong, such as a schema mismatch or a failed signature check. NFR-4 tolerates the first class and makes them not worth alerting on; conflating the two produces either noise or silence.",
+      "files": [
+        "lumens-vault/backend/src/errors.ts (new)",
+        "lumens-vault/backend/test/errors.test.ts (new)"
+      ],
+      "acceptance": [
+        "A small set of error classes distinguishes transient from permanent, with the retry policy stated for each",
+        "Every error carries enough context to identify what failed without reading the stack",
+        "Errors crossing the HTTP boundary map to sensible status codes and never leak internal detail to the client",
+        "The taxonomy is documented in a comment explaining the NFR-4 reasoning"
+      ],
+      "nonGoals": ["No alerting; that is IAlertSink's job."]
+    },
+    {
+      "id": "E07-18",
+      "title": "Implement the alert sink port",
+      "labels": ["backend"],
+      "requirements": ["FR-18", "G-24"],
+      "dependsOn": ["E07-16", "E07-17"],
+      "scope": "IAlertSink is where this application's own alerts go: admin actions detected, price guards tripped, ingestion in trouble. It is deliberately not where Sorokeep's TTL alerts go — those arrive inbound via webhook. Start with a logging implementation; the port makes a real channel a later, isolated change.",
+      "files": [
+        "lumens-vault/backend/src/adapters/alert-sink/logging.ts (new)",
+        "lumens-vault/backend/test/adapters/alert-sink/logging.test.ts (new)"
+      ],
+      "acceptance": [
+        "Implements IAlertSink and emits a structured log line per alert",
+        "All three alert kinds and all three severities are handled",
+        "The eventId field is used for idempotency where present, so a replayed event does not re-alert; a test proves it",
+        "A comment states that Sorokeep's alerts do not flow through this sink and explains why, since the two are easy to confuse"
+      ],
+      "nonGoals": ["No Slack or email channel. No PagerDuty; explicitly out of scope."]
+    },
+    {
+      "id": "E07-19",
+      "title": "Bootstrap the HTTP server with health and readiness endpoints",
+      "labels": ["backend"],
+      "requirements": ["G-24", "NFR-4"],
+      "dependsOn": ["E07-03", "E07-15", "E07-16"],
+      "scope": "The API process needs to start, bind a port and report whether it is actually working. Readiness is distinct from liveness here: the process can be alive while the database is unreachable or ingestion has fallen far behind.",
+      "files": [
+        "lumens-vault/backend/src/api/index.ts (new)",
+        "lumens-vault/backend/test/api/health.test.ts (new)"
+      ],
+      "acceptance": [
+        "The server starts on the configured port and shuts down cleanly on SIGTERM, closing the database",
+        "A liveness endpoint returns 200 whenever the process is running",
+        "A readiness endpoint checks the database and reports ingestion lag, returning a non-200 with a body naming the failing dependency when unhealthy",
+        "Readiness reports how far behind the cursor is, since a backend that is up but hours behind is the realistic failure and NFR-4 makes it tolerable but worth surfacing",
+        "Tests cover both healthy and unhealthy responses"
+      ],
+      "nonGoals": ["No business endpoints; those are E12."]
+    },
+    {
+      "id": "E07-20",
+      "title": "Write the backend README",
+      "labels": ["backend", "docs"],
+      "requirements": ["G-16", "NFR-4"],
+      "dependsOn": ["E07-19"],
+      "scope": "A contributor picking up a backend issue needs to run it locally before they can do anything useful.",
+      "files": ["lumens-vault/backend/README.md (new)"],
+      "acceptance": [
+        "Covers prerequisites, install, configuration, running in development, and running tests",
+        "Explains the hexagonal layout in a short paragraph: what belongs in domain, ports and adapters, and the rule that domain never imports an adapter",
+        "States plainly that this layer is a display cache and never the source of truth for fund safety, so a contributor does not over-engineer it",
+        "Every command was run and the output is in the PR"
+      ],
+      "nonGoals": ["Not duplicating SYSTEM_DESIGN."]
+    },
+    {
+      "id": "E07-21",
+      "title": "Add an architecture boundary test",
+      "labels": ["backend", "testing"],
+      "requirements": ["NFR-4"],
+      "dependsOn": ["E07-15"],
+      "scope": "Hexagonal architecture holds only while the dependency direction does. A single import of the SQLite adapter from a domain module quietly destroys the testability the pattern was chosen for, and no reviewer catches that reliably.",
+      "files": ["lumens-vault/backend/test/architecture.test.ts (new)"],
+      "acceptance": [
+        "A test asserts no file under src/domain/ imports from src/adapters/",
+        "A test asserts domain modules import only from src/ports/ and standard libraries",
+        "The test fails when a violating import is added; demonstrate this by adding one temporarily and pasting the failure, then removing it",
+        "The failure message names the offending file and import"
+      ],
+      "nonGoals": ["No general-purpose lint rule engine."]
+    },
+    {
+      "id": "E07-22",
+      "title": "Verify the backend scaffold against the scaffold brief",
+      "labels": ["backend", "scaffolding"],
+      "requirements": ["NFR-7", "G-17"],
+      "dependsOn": ["E07-20", "E07-21"],
+      "scope": "SCAFFOLD_BRIEF.md specified an exact tree. This epic built it incrementally across many issues rather than in one pass, so check the result against the brief and correct whichever is wrong — the brief is not automatically right, and at least one of its claims is known to need revision.",
+      "files": ["lumens-vault/docs/SCAFFOLD_BRIEF.md (edit)"],
+      "acceptance": [
+        "The actual tree is compared to the brief's and every difference listed",
+        "Each difference is resolved in one direction with a stated reason: the code is corrected, or the brief is",
+        "The brief is updated to note that the four port files are provided pre-written rather than derived, which the addendum established but the brief never recorded",
+        "`npm install`, typecheck, lint, test and build all pass from a clean clone; paste the output"
+      ],
+      "nonGoals": ["Frontend scaffold verification is E14-02."]
+    }
+  ]
+}

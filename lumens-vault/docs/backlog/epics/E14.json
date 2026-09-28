@@ -1,0 +1,290 @@
+{
+  "epic": "E14",
+  "title": "Frontend: Foundation & Wallet",
+  "milestone": "LV4 - Design & Frontend Base",
+  "issues": [
+    {
+      "id": "E14-01",
+      "title": "Correct the scaffold brief's frontend tree before scaffolding from it",
+      "labels": ["frontend", "docs", "scaffolding"],
+      "requirements": ["G-17", "NFR-7"],
+      "dependsOn": ["E01-14"],
+      "scope": "SCAFFOLD_BRIEF.md lists four page files and says to use create-next-app defaults while also forbidding anything extra. Those two instructions conflict, and the tree omits app/layout.tsx, which the App Router requires. Fix the brief before anyone builds from it, rather than discovering the contradiction mid-scaffold.",
+      "files": ["lumens-vault/docs/SCAFFOLD_BRIEF.md (edit)"],
+      "acceptance": [
+        "Verify against a real create-next-app run what the App Router actually requires and what the default output contains; paste the file list",
+        "The tree is corrected to include every required file, at minimum a root layout, and the PR states what was missing",
+        "The contradiction between create-next-app defaults and nothing extra is resolved with explicit wording about which generated files are kept",
+        "The brief states that the frontend gate FR-24 blocks route content but not the scaffold itself, since the scaffold is structure rather than UI"
+      ],
+      "nonGoals": ["No scaffolding in this issue."]
+    },
+    {
+      "id": "E14-02",
+      "title": "Scaffold the Next.js application",
+      "labels": ["frontend", "scaffolding"],
+      "requirements": ["FR-24", "G-17"],
+      "dependsOn": ["E14-01"],
+      "scope": "Create the app skeleton with the four routes as placeholders only. FR-24 blocks real UI until E13-12 closes, so these routes carry a heading and nothing else.",
+      "files": [
+        "lumens-vault/frontend/package.json (new)",
+        "lumens-vault/frontend/tsconfig.json (new)",
+        "lumens-vault/frontend/next.config.ts (new)",
+        "lumens-vault/frontend/app/layout.tsx (new)",
+        "lumens-vault/frontend/app/page.tsx (new)",
+        "lumens-vault/frontend/app/deposit/page.tsx (new)",
+        "lumens-vault/frontend/app/vaults/page.tsx (new)",
+        "lumens-vault/frontend/app/operations/page.tsx (new)",
+        "lumens-vault/frontend/.gitignore (new)"
+      ],
+      "acceptance": [
+        "TypeScript, app router, strict mode enabled",
+        "Each route renders a heading and a one-line comment naming the issue that will implement it; no layout work, no wallet code, no API calls",
+        "`npm install`, `npm run dev`, `npm run build` and typecheck all succeed; paste the output for each",
+        "The tree matches the corrected brief exactly; list any difference and justify it",
+        "`git status` confirms nothing outside lumens-vault/frontend/ changed"
+      ],
+      "nonGoals": ["No real UI. No styling decisions. No wallet integration."]
+    },
+    {
+      "id": "E14-03",
+      "title": "Add frontend configuration and fail-fast validation",
+      "labels": ["frontend"],
+      "requirements": ["G-16", "FR-20"],
+      "dependsOn": ["E14-02"],
+      "scope": "The frontend needs the backend URL, the contract id, the network passphrase and an RPC URL. A missing contract id that silently defaults produces an app that looks like it works and shows nothing, which is worse than a startup failure.",
+      "files": [
+        "lumens-vault/frontend/lib/config.ts (new)",
+        "lumens-vault/frontend/.env.example (new)"
+      ],
+      "acceptance": [
+        "All settings come from environment variables; nothing is hardcoded, including the contract id",
+        "Validation runs at startup and fails visibly with a message naming the missing variable rather than rendering a broken page",
+        "Only values safe for the browser are exposed to the client bundle; state which are public and why each is safe",
+        ".env.example lists every variable with a comment and no real values",
+        "The contract id matches the one in docs/deployments.md; a mismatch between frontend and backend must be detectable, so both are displayed somewhere in the UI"
+      ],
+      "nonGoals": ["No secrets in the frontend at all."]
+    },
+    {
+      "id": "E14-04",
+      "title": "Build the typed API client",
+      "labels": ["frontend"],
+      "requirements": ["FR-22", "NFR-4"],
+      "dependsOn": ["E14-03", "E12-16"],
+      "scope": "One place that talks to the backend, with types matching docs/api.md. Amounts arrive as strings and must stay strings or bigint through the client — a single implicit conversion to a JavaScript number silently corrupts large balances.",
+      "files": [
+        "lumens-vault/frontend/lib/api/client.ts (new)",
+        "lumens-vault/frontend/lib/api/types.ts (new)"
+      ],
+      "acceptance": [
+        "Types mirror the documented API responses exactly",
+        "Amount fields are typed as string or bigint, never number, and a test asserts a large amount survives a round trip unchanged",
+        "Network failures and non-2xx responses produce typed errors distinguishing backend-unreachable from backend-returned-an-error, since the UI treats them differently",
+        "A 429 is surfaced distinctly so the UI can back off rather than retry immediately",
+        "No component calls fetch directly; all traffic goes through this client"
+      ],
+      "nonGoals": ["No data-fetching library choice imposed here."]
+    },
+    {
+      "id": "E14-05",
+      "title": "Detect Freighter and handle it being absent",
+      "labels": ["frontend"],
+      "requirements": ["FR-20"],
+      "dependsOn": ["E14-02", "E13-12"],
+      "scope": "Freighter is a browser extension and most first-time visitors will not have it. Detection must handle the extension injecting asynchronously, which is a common source of false negatives on first paint.",
+      "files": [
+        "lumens-vault/frontend/lib/wallet/detect.ts (new)",
+        "lumens-vault/frontend/test/wallet/detect.test.ts (new)"
+      ],
+      "acceptance": [
+        "Detects whether Freighter is installed without throwing when it is not",
+        "Handles the extension becoming available after initial page load rather than deciding once and caching a false negative",
+        "The not-installed state renders the design from E13-08, including where to get it",
+        "Server-side rendering does not break — the check must not run during SSR, and the PR states how that is ensured",
+        "Tests cover present, absent, and late-injection"
+      ],
+      "nonGoals": ["No other wallet support."]
+    },
+    {
+      "id": "E14-06",
+      "title": "Implement wallet connection and disconnection",
+      "labels": ["frontend"],
+      "requirements": ["FR-20"],
+      "dependsOn": ["E14-05"],
+      "scope": "Connect, expose the public key, and disconnect. User rejection is a normal outcome and must not surface as an error state.",
+      "files": [
+        "lumens-vault/frontend/lib/wallet/connect.ts (new)",
+        "lumens-vault/frontend/test/wallet/connect.test.ts (new)"
+      ],
+      "acceptance": [
+        "Connecting requests access and stores the returned public key",
+        "User rejection returns the app to the disconnected state quietly, with no error banner",
+        "Disconnect clears all wallet state and any cached user data, so the next user does not see the previous one's vaults",
+        "Connection state survives a page refresh if the wallet is still authorised, and the mechanism is stated",
+        "Tests cover success, rejection, and the extension erroring"
+      ],
+      "nonGoals": ["No signing yet."]
+    },
+    {
+      "id": "E14-07",
+      "title": "Detect and handle network mismatch",
+      "labels": ["frontend", "security"],
+      "requirements": ["FR-20"],
+      "dependsOn": ["E14-06", "E14-03"],
+      "scope": "A wallet on mainnet against a testnet contract shows an empty, apparently-working app. Worse, a user could sign a transaction intended for a different network. This check must be prominent and blocking.",
+      "files": [
+        "lumens-vault/frontend/lib/wallet/network.ts (new)",
+        "lumens-vault/frontend/test/wallet/network.test.ts (new)"
+      ],
+      "acceptance": [
+        "The wallet's network is read and compared against configuration on connection and whenever it changes",
+        "A mismatch blocks all transaction actions and displays which network is required, per the E13-08 design",
+        "It must never present as an empty portfolio; a test asserts the mismatch state takes precedence over rendering empty data",
+        "Network switching in the wallet is detected without requiring a page reload",
+        "Tests cover match, mismatch, and a switch while connected"
+      ],
+      "nonGoals": ["No programmatic network switching."]
+    },
+    {
+      "id": "E14-08",
+      "title": "Implement transaction signing and submission",
+      "labels": ["frontend"],
+      "requirements": ["FR-20", "FR-21", "FR-3"],
+      "dependsOn": ["E14-07"],
+      "scope": "Build, simulate, sign and submit contract invocations, then wait for confirmation. This is shared by deposit and withdraw, so it lives here rather than being written twice.",
+      "files": [
+        "lumens-vault/frontend/lib/wallet/sign.ts (new)",
+        "lumens-vault/frontend/test/wallet/sign.test.ts (new)"
+      ],
+      "acceptance": [
+        "Transactions are simulated before signing so a failure that is going to happen is caught before the user is asked to approve",
+        "A simulation failure maps the contract error code to a readable message using the error list in docs/contract-interface.md",
+        "The correct network passphrase is used; a test asserts it comes from configuration rather than a default",
+        "Submission polls for confirmation with a timeout, and a timeout is reported as unknown rather than failed — the transaction may still land, and telling a user it failed when it succeeded is the worst outcome",
+        "User rejection at the signing step is handled quietly",
+        "Tests cover simulation failure, rejection, success, and confirmation timeout"
+      ],
+      "nonGoals": ["No fee-bump handling."]
+    },
+    {
+      "id": "E14-09",
+      "title": "Map contract error codes to user-facing messages",
+      "labels": ["frontend"],
+      "requirements": ["FR-21", "FR-3"],
+      "dependsOn": ["E14-08", "E05-22"],
+      "scope": "The contract returns numeric error codes. Showing a user Error 5 is useless; showing them that their lock has not expired is actionable. The mapping must be kept in step with the contract's enum.",
+      "files": [
+        "lumens-vault/frontend/lib/errors.ts (new)",
+        "lumens-vault/frontend/test/errors.test.ts (new)"
+      ],
+      "acceptance": [
+        "Every error variant in docs/contract-interface.md has a message that says what happened and what the user can do",
+        "An unrecognised code degrades to a generic message including the raw code, rather than showing nothing",
+        "A test asserts the mapping covers every documented variant, so a contract adding an error without a message fails",
+        "Messages avoid blame and jargon — TimelockNotExpired becomes a statement about the unlock date, not an error name",
+        "A comment records that error codes must never be renumbered once deployed, and that this mapping is why"
+      ],
+      "nonGoals": ["No internationalisation."]
+    },
+    {
+      "id": "E14-10",
+      "title": "Build the shared amount and decimals utilities",
+      "labels": ["frontend"],
+      "requirements": ["FR-19", "FR-22"],
+      "dependsOn": ["E14-04", "E13-09"],
+      "scope": "Amounts are i128 strings scaled by per-asset decimals. Every display and every input conversion goes through here, because doing it ad hoc in components is how precision bugs get everywhere.",
+      "files": [
+        "lumens-vault/frontend/lib/amount.ts (new)",
+        "lumens-vault/frontend/test/amount.test.ts (new)"
+      ],
+      "acceptance": [
+        "Formatting takes a raw string amount and the asset's decimals and returns a display string; it never accepts or produces a JavaScript number",
+        "Parsing user input returns a raw string amount, rejecting more decimal places than the asset supports rather than truncating silently",
+        "Decimals are always passed in, never assumed — a test covers assets with seven and six decimals producing different output for the same raw value",
+        "Values beyond Number.MAX_SAFE_INTEGER format correctly; this test is the reason the module exists",
+        "Rounding behaviour for display is stated and never rounds up, so a displayed balance is never more than the real one"
+      ],
+      "nonGoals": ["No currency formatting beyond USD."]
+    },
+    {
+      "id": "E14-11",
+      "title": "Build the ledger-to-time utilities",
+      "labels": ["frontend"],
+      "requirements": ["FR-2", "FR-22"],
+      "dependsOn": ["E13-09"],
+      "scope": "The contract works in ledger sequence numbers; users think in dates. The conversion assumes five seconds per ledger, which is an average rather than a guarantee, and the resulting imprecision must be honest rather than hidden.",
+      "files": [
+        "lumens-vault/frontend/lib/ledger-time.ts (new)",
+        "lumens-vault/frontend/test/ledger-time.test.ts (new)"
+      ],
+      "acceptance": [
+        "Converts a ledger difference to a human duration and an unlock ledger to an approximate date",
+        "The five-seconds-per-ledger assumption is stated in one place and used everywhere",
+        "Output is presented as approximate; a test asserts the formatting conveys that rather than implying a precise timestamp",
+        "Durations under one ledger, and past unlock ledgers, both render sensibly rather than as negative time",
+        "A comment notes that ledger close times vary, so a countdown will drift and must not be presented as exact"
+      ],
+      "nonGoals": ["No live countdown component here."]
+    },
+    {
+      "id": "E14-12",
+      "title": "Implement the app shell and navigation",
+      "labels": ["frontend"],
+      "requirements": ["FR-22", "FR-23"],
+      "dependsOn": ["E14-06", "E13-12"],
+      "scope": "The layout every route sits inside: navigation, wallet status, and the global banners for paused contract and stale backend.",
+      "files": [
+        "lumens-vault/frontend/app/layout.tsx (edit)",
+        "lumens-vault/frontend/components/Shell.tsx (new)"
+      ],
+      "acceptance": [
+        "Navigation covers all four routes with the active one indicated",
+        "Wallet connection state and the connected address are always visible",
+        "A global banner shows when the contract is paused, since it affects every action",
+        "A global banner shows when the backend is significantly behind or unreachable, so no page silently shows stale data",
+        "The network in use is displayed, so a testnet deployment is never mistaken for mainnet",
+        "Keyboard navigation works through the whole shell, per E13-10"
+      ],
+      "nonGoals": ["No page content."]
+    },
+    {
+      "id": "E14-13",
+      "title": "Implement shared loading and error components",
+      "labels": ["frontend"],
+      "requirements": ["FR-22", "NFR-4"],
+      "dependsOn": ["E14-12", "E13-09"],
+      "scope": "Every view loads and every view can fail. Building these once keeps behaviour consistent and stops each page inventing its own spinner and error text.",
+      "files": [
+        "lumens-vault/frontend/components/Loading.tsx (new)",
+        "lumens-vault/frontend/components/ErrorState.tsx (new)",
+        "lumens-vault/frontend/components/EmptyState.tsx (new)"
+      ],
+      "acceptance": [
+        "Loading, error and empty components match the E13-09 specification",
+        "The error component distinguishes backend-unreachable from a real error and offers a retry where retrying could help",
+        "An error boundary prevents one failing section from blanking the whole page",
+        "Components are accessible: loading state is announced to assistive technology, errors are associated with what failed",
+        "No component shows a raw exception message to the user"
+      ],
+      "nonGoals": ["No error reporting service."]
+    },
+    {
+      "id": "E14-14",
+      "title": "Verify the frontend foundation end to end",
+      "labels": ["frontend", "testing"],
+      "requirements": ["FR-20", "G-17"],
+      "dependsOn": ["E14-08", "E14-09", "E14-10", "E14-12", "E14-13"],
+      "scope": "Checkpoint before feature work: the app runs, connects a real wallet, reads from a real backend, and handles the failure paths that will otherwise be discovered one at a time during E15.",
+      "files": ["lumens-vault/frontend/README.md (new)"],
+      "acceptance": [
+        "A real Freighter wallet connects against the deployed testnet contract; state the browser and extension version",
+        "Wrong-network detection is verified by actually switching the wallet to mainnet and confirming the app blocks and explains",
+        "The app runs with the backend stopped and shows the unreachable state rather than crashing",
+        "`npm run build` produces a production build with zero TypeScript errors",
+        "The README covers setup, configuration and the wallet requirement, with every command actually run"
+      ],
+      "nonGoals": ["No feature pages; those are E15."]
+    }
+  ]
+}

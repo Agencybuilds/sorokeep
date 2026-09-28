@@ -1,0 +1,257 @@
+{
+  "epic": "E17",
+  "title": "Integration, E2E & Handover",
+  "milestone": "LV5 - Frontend & Release",
+  "issues": [
+    {
+      "id": "E17-01",
+      "title": "Choose and set up the end-to-end testing approach",
+      "labels": ["testing", "devops"],
+      "requirements": ["G-20"],
+      "dependsOn": ["E15-24"],
+      "scope": "Nothing currently exercises the three deployables together. The hard part is the wallet: Freighter is a browser extension and signing is interactive, so decide how transactions get signed in an automated test before writing any.",
+      "files": [
+        "lumens-vault/docs/adr/0014-e2e-approach.md (new)",
+        "lumens-vault/e2e/package.json (new)"
+      ],
+      "acceptance": [
+        "A browser automation tool is chosen and justified",
+        "The wallet problem is solved concretely — extension automation, a mock wallet provider injected at test time, or driving the contract directly and asserting only the read path. State which and its limitation",
+        "If signing cannot be automated, say so plainly and define what the E2E suite covers instead rather than pretending coverage exists",
+        "The harness runs one trivial test against a locally running stack, proving the setup works",
+        "Where E2E lives and how it is run is documented"
+      ],
+      "nonGoals": ["No tests yet."]
+    },
+    {
+      "id": "E17-02",
+      "title": "Build a reproducible local stack for end-to-end runs",
+      "labels": ["testing", "devops"],
+      "requirements": ["G-20"],
+      "dependsOn": ["E17-01"],
+      "scope": "E2E needs the contract, backend and frontend running together against known data. Without a scripted setup, every run starts with manual steps and the tests get skipped.",
+      "files": ["lumens-vault/scripts/e2e-stack.ps1 (new)"],
+      "acceptance": [
+        "One command starts the backend and frontend configured against the testnet deployment with a clean database",
+        "It waits for readiness rather than assuming a fixed delay, and fails clearly if a component does not come up",
+        "Teardown stops everything and removes the test database",
+        "The seeded contract state it expects is documented, and it verifies that state rather than assuming it",
+        "Works from a clean checkout; demonstrate it"
+      ],
+      "nonGoals": ["No local Stellar node; testnet is sufficient."]
+    },
+    {
+      "id": "E17-03",
+      "title": "End-to-end test the deposit path",
+      "labels": ["testing"],
+      "requirements": ["G-20", "FR-21", "FR-17"],
+      "dependsOn": ["E17-02"],
+      "scope": "The full path the architecture describes: user deposits, contract emits, backend ingests, dashboard reflects it. Every unit test in this project passes while this path is broken at any seam.",
+      "files": ["lumens-vault/e2e/deposit.spec.ts (new)"],
+      "acceptance": [
+        "A deposit is submitted through the UI using the E17-01 signing approach",
+        "The transaction confirms on testnet and the hash is captured",
+        "The test waits for backend ingestion rather than assuming immediacy, and records how long it took",
+        "The new vault appears in the list with the correct asset, amount and unlock date",
+        "The displayed balance is reconciled against a direct get_vault call, so the test proves correctness rather than internal consistency",
+        "The test is repeatable and does not depend on state left by a previous run"
+      ],
+      "nonGoals": ["Withdrawal is E17-04."]
+    },
+    {
+      "id": "E17-04",
+      "title": "End-to-end test the withdrawal path",
+      "labels": ["testing"],
+      "requirements": ["G-20", "FR-3"],
+      "dependsOn": ["E17-03"],
+      "scope": "Withdrawal including the partial case, whose remainder semantics are the most likely thing to be implemented inconsistently between contract, backend and UI.",
+      "files": ["lumens-vault/e2e/withdraw.spec.ts (new)"],
+      "acceptance": [
+        "A matured vault is withdrawn partially; the UI, the backend and the contract all agree on the remainder",
+        "The remainder's unlock date is unchanged in all three, which is the property FR-3 promises",
+        "A full withdrawal follows and the outcome matches what E03-01 and E09-01 decided",
+        "Attempting to withdraw before maturity shows the mapped error rather than a raw code",
+        "Vaults needed for the test are created by the test itself rather than depending on prior seed state"
+      ],
+      "nonGoals": ["No archived-entry scenario; it cannot be reliably induced."]
+    },
+    {
+      "id": "E17-05",
+      "title": "End-to-end test admin actions surfacing on the operations page",
+      "labels": ["testing"],
+      "requirements": ["G-20", "FR-18", "FR-23"],
+      "dependsOn": ["E17-02"],
+      "scope": "Admin actions have the longest path in the system — contract event, ingestion, detection, alerting, API, page — and the operations page is the only place they appear anywhere.",
+      "files": ["lumens-vault/e2e/admin-actions.spec.ts (new)"],
+      "acceptance": [
+        "A real admin action is performed against the testnet contract; pause and unpause is sufficient and reversible",
+        "It appears in the operations page's admin history after ingestion, with the correct actor and time",
+        "The paused state propagates to the deposit flow, which blocks with the reason shown",
+        "Unpausing restores normal operation in the UI",
+        "The contract is left unpaused regardless of test outcome; state how that is guaranteed"
+      ],
+      "nonGoals": ["No upgrade in an automated test; too consequential to run unattended."]
+    },
+    {
+      "id": "E17-06",
+      "title": "End-to-end test the failure paths",
+      "labels": ["testing"],
+      "requirements": ["G-20", "NFR-4"],
+      "dependsOn": ["E17-03"],
+      "scope": "NFR-4 makes specific promises about degradation. Verify them against the running stack rather than trusting the unit tests that stub exactly the conditions being claimed.",
+      "files": ["lumens-vault/e2e/degradation.spec.ts (new)"],
+      "acceptance": [
+        "With the backend stopped, the frontend shows the unreachable state and still permits wallet-only actions",
+        "With the backend lagging deliberately, the staleness indicator appears",
+        "A user with no vaults sees the empty state rather than an error",
+        "A wallet on the wrong network is blocked with a clear message and never shows an empty portfolio",
+        "Each scenario is set up programmatically rather than by hand"
+      ],
+      "nonGoals": ["No chaos testing."]
+    },
+    {
+      "id": "E17-07",
+      "title": "Run the end-to-end suite in CI on a schedule",
+      "labels": ["testing", "devops"],
+      "requirements": ["G-20", "G-15"],
+      "dependsOn": ["E17-03", "E17-04", "E17-05"],
+      "scope": "These tests hit live testnet, so they are too slow and too externally dependent for every pull request. A scheduled run catches regressions without blocking development. Note the parent repo has an existing nightly workflow that opens a new issue per failure and accumulated twenty-seven of them; do not repeat that pattern.",
+      "files": [".github/workflows/lumens-vault-e2e.yml (new)"],
+      "acceptance": [
+        "Runs on a schedule and on manual dispatch, not on every pull request",
+        "Failures are reported without opening a new issue every night — reuse or reopen a single tracking issue, and state the mechanism",
+        "Test account keys come from repository secrets and never appear in logs",
+        "A failure produces enough diagnostic output to investigate without rerunning locally",
+        "The workflow has run green at least once; link it"
+      ],
+      "nonGoals": ["No E2E gate on pull requests."]
+    },
+    {
+      "id": "E17-08",
+      "title": "Verify the full requirements coverage matrix",
+      "labels": ["docs", "testing"],
+      "requirements": ["NFR-7", "NFR-1"],
+      "dependsOn": ["E17-04", "E16-13"],
+      "scope": "The backlog was built from the requirements register specifically so coverage could be proven rather than assumed. Close the loop: walk every FR, NFR and gap and confirm it was actually delivered, not merely that an issue existed.",
+      "files": ["lumens-vault/docs/backlog/COVERAGE.md (edit)"],
+      "acceptance": [
+        "Every FR-1 through FR-24 is marked delivered, partially delivered or not delivered, with the evidence — a merged issue, a test name, or a document",
+        "Every NFR-1 through NFR-7 likewise",
+        "Every G-item from the audit is confirmed resolved or explicitly carried forward",
+        "Every D-item decision is confirmed closed with the ADR that closed it",
+        "Anything not delivered is listed as a known gap rather than quietly omitted — an honest gap list is the point of this issue"
+      ],
+      "nonGoals": ["No new features to close gaps found here; open issues instead."]
+    },
+    {
+      "id": "E17-09",
+      "title": "Complete the pre-mainnet security checklist",
+      "labels": ["security", "docs"],
+      "requirements": ["NFR-1"],
+      "dependsOn": ["E17-08", "E04-14", "E06-12"],
+      "scope": "Work through the checklist E04-14 created and record the real state of each item. Several were listed in the original handoff as things that must happen before mainnet and had no issue at all until this backlog.",
+      "files": ["lumens-vault/docs/pre-mainnet-checklist.md (edit)"],
+      "acceptance": [
+        "Each item is marked complete with its evidence, or incomplete with what remains",
+        "The live testnet upgrade rehearsal from E06-12 is confirmed and linked",
+        "Event topic counts are confirmed verified against real emissions",
+        "Sorokeep flags are confirmed verified against the live CLI",
+        "The independent security review item is honestly marked — if it has not happened, it says so, and the checklist states plainly that mainnet is gated on it",
+        "The document states clearly whether the project is or is not ready for mainnet, as a single unambiguous conclusion"
+      ],
+      "nonGoals": ["Not performing the security review. Not deploying to mainnet."]
+    },
+    {
+      "id": "E17-10",
+      "title": "Write the project README for an external audience",
+      "labels": ["docs"],
+      "requirements": ["NFR-7"],
+      "dependsOn": ["E16-14", "E17-08"],
+      "scope": "The README written in E01-07 was for contributors on an empty project. Rewrite it now that the thing exists, for someone arriving to evaluate it — including what it demonstrates about storage lifecycle management, which is half the project's purpose.",
+      "files": ["lumens-vault/README.md (edit)"],
+      "acceptance": [
+        "States what the project is, what it demonstrates, and its current status without overstating it",
+        "Links to the deployed testnet contract and explains how to try it",
+        "Explains the Sorokeep relationship accurately: a separate existing tool consumed as a dependency, never reimplemented",
+        "Summarises the TTL findings from E10-14, including the negative results",
+        "States clearly that this is testnet and not audited, so nobody mistakes it for production-ready",
+        "Every command in it was run and works"
+      ],
+      "nonGoals": ["No marketing language."]
+    },
+    {
+      "id": "E17-11",
+      "title": "Consolidate and prune the documentation set",
+      "labels": ["docs"],
+      "requirements": ["NFR-7"],
+      "dependsOn": ["E17-10"],
+      "scope": "The project accumulated three overlapping handoff documents, a generation brief and a large backlog. Several were build inputs rather than deliverables, and at least one — PROJECT_HANDOFF — contains claims this audit proved wrong. Leaving them alongside the real documentation guarantees someone reads the wrong one.",
+      "files": [
+        "lumens-vault/PROJECT_HANDOFF.md (edit or delete)",
+        "lumens-vault/HANDOFF_ADDENDUM.md (edit or delete)",
+        "lumens-vault/docs/backlog/GENERATION_BRIEF.md (delete)"
+      ],
+      "acceptance": [
+        "Every document is classified as current reference, historical record, or build input to be deleted",
+        "Historical documents are clearly marked as superseded with a pointer to what replaced them, rather than silently deleted or silently left as if current",
+        "PROJECT_HANDOFF's factually incorrect claims are either corrected or the document is marked historical — specifically that the contract was never shown to build to wasm, which this audit disproved",
+        "The old eleven-issue ISSUE_BACKLOG is marked superseded by the epic backlog",
+        "A short index in docs/ states what each remaining document is for"
+      ],
+      "nonGoals": ["Do not delete anything with unique historical value without marking it first."]
+    },
+    {
+      "id": "E17-12",
+      "title": "Record the architecture decisions made during implementation",
+      "labels": ["docs"],
+      "requirements": ["NFR-7"],
+      "dependsOn": ["E17-11"],
+      "scope": "NFR-7 requires decisions to be recorded with their status and source. Roughly fourteen ADRs were produced across the epics; check they exist, are consistent, and that no significant decision was made without one.",
+      "files": ["lumens-vault/docs/adr/README.md (new)"],
+      "acceptance": [
+        "An index lists every ADR with its number, title, date and status",
+        "Each ADR that was an acceptance criterion somewhere is confirmed to exist",
+        "Any decision made during implementation without an ADR is identified and one is written retrospectively, marked as such",
+        "Superseded ADRs are marked and point at what replaced them",
+        "No two ADRs contradict each other; state how this was checked"
+      ],
+      "nonGoals": ["No retroactive rewriting of decisions that were made."]
+    },
+    {
+      "id": "E17-13",
+      "title": "Prepare the post-Wave-9 repository migration",
+      "labels": ["devops", "docs"],
+      "requirements": ["G-21", "D-5"],
+      "dependsOn": ["E17-11"],
+      "scope": "Lumens Vault lives inside the sorokeep repository only for the duration of Wave 9. The whole self-contained folder structure exists so this move is mechanical, but the move itself needs planning — history, issues and CI all need handling.",
+      "files": ["lumens-vault/docs/migration-plan.md (new)"],
+      "acceptance": [
+        "Documents how to extract the folder preserving history, naming the specific tool and command",
+        "Covers migrating the issues: whether they move, are closed and recreated, or are left behind, with the tradeoff stated",
+        "Lists every CI path filter and reference that must change, and notes they can be simplified once the project stands alone",
+        "Confirms nothing Lumens-Vault-specific exists outside the folder; state how this was verified, since it is the assumption the whole plan rests on",
+        "Notes the license and README sections that need revisiting once it is a standalone repository",
+        "Rehearsed against a scratch clone, with the result recorded"
+      ],
+      "nonGoals": ["Not performing the migration."]
+    },
+    {
+      "id": "E17-14",
+      "title": "Write the handover summary",
+      "labels": ["docs"],
+      "requirements": ["NFR-7", "NFR-1"],
+      "dependsOn": ["E17-09", "E17-12", "E17-13"],
+      "scope": "A single document stating where the project actually stands: what works, what is verified, what is assumed, and what is unfinished. This project's history includes several instances of work reported as complete that was not, so the value here is accuracy rather than completeness.",
+      "files": ["lumens-vault/docs/handover.md (new)"],
+      "acceptance": [
+        "States what is deployed, where, and at which commit and wasm hash",
+        "Lists what has been verified against live systems versus what is only unit-tested, keeping the two clearly separate",
+        "Lists every known gap and open decision with a pointer to its issue",
+        "States plainly what would be required before mainnet, referencing the checklist",
+        "Records the unresolved external dependency on a sorokeep release exporting verifyWebhookSignature, if it is still unresolved",
+        "Contains no claim that was not verified; anything uncertain is labelled as such rather than stated confidently"
+      ],
+      "nonGoals": ["Not a status report for stakeholders; this is for whoever picks the work up next."]
+    }
+  ]
+}
