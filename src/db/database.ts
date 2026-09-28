@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 
 import Database from "better-sqlite3";
 import { Migrator } from "./migrator.js";
+import { getLogger } from "../logging/index.js";
+
+const logger = getLogger().child({ component: "Database" });
+
 const SOROKEEP_DIR = path.join(os.homedir(), '.sorokeep');
 
 const DB_PATH = path.join(SOROKEEP_DIR, 'sorokeep.db');
@@ -80,7 +84,17 @@ export function getDatabase(customPath?: string): Database.Database {
         `ALTER TABLE extension_policies ADD COLUMN max_fee_stroops INTEGER`,
     ];
     for (const sql of migrations) {
-        try { db.exec(sql); } catch { /* column already exists — no-op */ }
+        try {
+            db.exec(sql);
+        } catch (err: unknown) {
+            // Only "already exists" is expected here. A bare catch would also
+            // swallow a typo, a missing table or a constraint violation, so a
+            // statement could silently never apply and nothing would say so.
+            const message = err instanceof Error ? err.message : String(err);
+            if (!/duplicate column name|already exists/i.test(message)) {
+                throw new Error(`Live migration failed: ${message}\n  statement: ${sql.trim().slice(0, 120)}`);
+            }
+        }
     }
 
     migrateAlertConfigsChannelTypeCheck(db);
@@ -141,6 +155,62 @@ function migrateAlertConfigsChannelTypeCheck(db: Database.Database): void {
  * in place (SQLite has no `ALTER TABLE ... DROP CONSTRAINT`) to the new
  * permissive CHECK, preserving all rows. No-op once already relaxed.
  */
+/**
+ * Rebuilds a table with a new definition, carrying over every column the old and
+ * new definitions share.
+ *
+ * SQLite cannot drop a CHECK constraint, so relaxing one means the twelve-step
+ * rebuild dance: create a replacement, copy, drop, rename. The dangerous part is
+ * the copy — an earlier version of this listed its columns by hand, so when
+ * `enabled` was later added to `alert_configs` by migration 005, every rebuild
+ * silently dropped both the column and its data. Anyone who had disabled an
+ * alert config lost that state, and nothing failed loudly.
+ *
+ * Computing the copy list as the intersection of the two tables means a column
+ * added in future is carried over automatically. Columns only in the new
+ * definition take their default; columns only in the old one are intentionally
+ * being removed and are dropped.
+ */
+function rebuildTable(
+    db: Database.Database,
+    table: string,
+    newTableDdl: (tmpName: string) => string,
+): void {
+    const tmp = `${table}__rebuild`;
+    const columnsOf = (t: string): string[] =>
+        (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((c) => c.name);
+
+    const before = columnsOf(table);
+
+    db.exec("PRAGMA foreign_keys = OFF;");
+    db.exec("BEGIN TRANSACTION;");
+    try {
+        db.exec(newTableDdl(tmp));
+
+        const shared = columnsOf(tmp).filter((c) => before.includes(c));
+        const dropped = before.filter((c) => !shared.includes(c));
+        if (dropped.length) {
+            // Not necessarily a bug — a rebuild can legitimately remove a column —
+            // but it should never happen silently again.
+            logger.warn(
+                `Rebuilding ${table}: dropping column(s) ${dropped.join(", ")}. ` +
+                `If that was not intended, the replacement definition is missing them.`,
+            );
+        }
+
+        const cols = shared.join(", ");
+        db.exec(`INSERT INTO ${tmp} (${cols}) SELECT ${cols} FROM ${table};`);
+        db.exec(`DROP TABLE ${table};`);
+        db.exec(`ALTER TABLE ${tmp} RENAME TO ${table};`);
+        db.exec("COMMIT;");
+    } catch (err) {
+        db.exec("ROLLBACK;");
+        throw err;
+    } finally {
+        db.exec("PRAGMA foreign_keys = ON;");
+    }
+}
+
 function relaxChannelTypeChecks(db: Database.Database): void {
     const hasEnumCheck = (tableName: string): boolean => {
         const row = db.prepare(`
@@ -150,10 +220,9 @@ function relaxChannelTypeChecks(db: Database.Database): void {
     };
 
     if (hasEnumCheck("alert_configs")) {
-        db.exec("PRAGMA foreign_keys = OFF;");
-        db.exec("BEGIN TRANSACTION;");
-        db.exec(`
-            CREATE TABLE alert_configs_relaxed (
+        // Must stay in step with schema.sql's alert_configs definition.
+        rebuildTable(db, "alert_configs", (t) => `
+            CREATE TABLE ${t} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 contract_id TEXT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
                 channel_type TEXT NOT NULL CHECK(channel_type <> ''),
@@ -163,25 +232,15 @@ function relaxChannelTypeChecks(db: Database.Database): void {
                 quiet_hours_start    TEXT,
                 quiet_hours_end      TEXT,
                 quiet_hours_timezone TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         `);
-        db.exec(`
-            INSERT INTO alert_configs_relaxed (id, contract_id, channel_type, channel_target, threshold_ledgers, webhook_secret, quiet_hours_start, quiet_hours_end, quiet_hours_timezone, created_at)
-            SELECT id, contract_id, channel_type, channel_target, threshold_ledgers, webhook_secret, quiet_hours_start, quiet_hours_end, quiet_hours_timezone, created_at
-            FROM alert_configs
-        `);
-        db.exec(`DROP TABLE alert_configs;`);
-        db.exec(`ALTER TABLE alert_configs_relaxed RENAME TO alert_configs;`);
-        db.exec("COMMIT;");
-        db.exec("PRAGMA foreign_keys = ON;");
     }
 
     if (hasEnumCheck("resource_alert_configs")) {
-        db.exec("PRAGMA foreign_keys = OFF;");
-        db.exec("BEGIN TRANSACTION;");
-        db.exec(`
-            CREATE TABLE resource_alert_configs_relaxed (
+        rebuildTable(db, "resource_alert_configs", (t) => `
+            CREATE TABLE ${t} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 contract_id TEXT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
                 channel_type TEXT NOT NULL CHECK(channel_type <> ''),
@@ -193,15 +252,6 @@ function relaxChannelTypeChecks(db: Database.Database): void {
                 UNIQUE(contract_id, channel_type, channel_target)
             )
         `);
-        db.exec(`
-            INSERT INTO resource_alert_configs_relaxed (id, contract_id, channel_type, channel_target, cpu_limit, mem_limit, webhook_secret, created_at)
-            SELECT id, contract_id, channel_type, channel_target, cpu_limit, mem_limit, webhook_secret, created_at
-            FROM resource_alert_configs
-        `);
-        db.exec(`DROP TABLE resource_alert_configs;`);
-        db.exec(`ALTER TABLE resource_alert_configs_relaxed RENAME TO resource_alert_configs;`);
-        db.exec("COMMIT;");
-        db.exec("PRAGMA foreign_keys = ON;");
     }
 }
 

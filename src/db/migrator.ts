@@ -2,6 +2,22 @@ import type Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 
+/**
+ * Splits a migration file into executable statements, discarding comments and
+ * blank lines. Deliberately simple: these files are hand-written DDL with no
+ * string literals containing semicolons, and a real SQL parser would be more
+ * machinery than the job needs.
+ */
+function splitStatements(sql: string): string[] {
+    return sql
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("--"))
+        .join("\n")
+        .split(";")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+}
+
 export class Migrator {
     private db: Database.Database;
     private migrationsDir: string;
@@ -64,13 +80,27 @@ export class Migrator {
     }
 
     /**
-     * Executes all pending migrations sequentially.
-     * Each migration script is executed in its own transaction.
+     * Executes all pending migrations sequentially, each in its own transaction.
      *
-     * If a migration consists solely of ADD COLUMN statements and the column
-     * already exists (i.e. the schema was created from a schema.sql that already
-     * includes the column), the "duplicate column name" error is swallowed and
-     * the migration is still recorded as applied — the intent is fulfilled.
+     * A migration made only of `ALTER TABLE ... ADD COLUMN` statements is run
+     * statement by statement, and a "duplicate column name" on any one of them is
+     * tolerated. That is deliberate and load-bearing:
+     *
+     * `getDatabase()` applies schema.sql before running migrations, so on a fresh
+     * database the columns a migration adds already exist, while on an upgraded
+     * one they may not — and the two can be mixed within a single migration.
+     * Migration 014 is exactly that case: it adds `predictive_cycles` to both
+     * `extension_policies` (which predates it, so the column is missing) and
+     * `guard_policy_history` (created by schema.sql, so the column is already
+     * there).
+     *
+     * An earlier version ran the whole file as one `exec` inside one transaction
+     * and caught the duplicate-column error around the outside. On an upgraded
+     * database that meant the first ALTER succeeded, the second raised, the
+     * transaction rolled the first one back, and the handler then recorded the
+     * migration as applied — so `extension_policies.predictive_cycles` was
+     * permanently absent and the migration could never run again to fix it.
+     * Per-statement execution is what makes the partial case work.
      */
     public run(): void {
         this.init();
@@ -78,37 +108,29 @@ export class Migrator {
 
         for (const migration of pending) {
             const sql = fs.readFileSync(migration.filepath, "utf-8");
+            const statements = splitStatements(sql);
+            const allAddColumn = statements.length > 0 &&
+                statements.every((s) => /^ALTER\s+TABLE\s+\S+\s+ADD\s+COLUMN/i.test(s));
 
-            // Define transaction for the migration run
             const runMigrationTx = this.db.transaction(() => {
-                this.db.exec(sql);
+                if (allAddColumn) {
+                    for (const statement of statements) {
+                        try {
+                            this.db.exec(statement);
+                        } catch (err: unknown) {
+                            const message = err instanceof Error ? err.message : String(err);
+                            // Already present is success for this statement; anything
+                            // else is a real failure and must abort the migration.
+                            if (!/duplicate column name/i.test(message)) throw err;
+                        }
+                    }
+                } else {
+                    this.db.exec(sql);
+                }
                 this.db.prepare("INSERT INTO schema_migrations (version) VALUES (?);").run(migration.version);
             });
 
-            try {
-                // Execute migration transaction
-                runMigrationTx();
-            } catch (err: unknown) {
-                // If every statement in this migration is an ALTER TABLE ADD COLUMN
-                // and the column already exists (schema.sql was applied first on a
-                // fresh / test DB), swallow the error and record the migration as
-                // applied — the column is already there, so the intent is fulfilled.
-                const message = err instanceof Error ? err.message : String(err);
-                const isAddColumnMigration = sql
-                    .split(";")
-                    .map((s) => s.trim())
-                    .filter((s) => s.length > 0 && !s.startsWith("--"))
-                    .every((s) => /^ALTER\s+TABLE\s+\S+\s+ADD\s+COLUMN/i.test(s));
-
-                if (isAddColumnMigration && /duplicate column name/i.test(message)) {
-                    // All statements add columns that already exist — mark as applied.
-                    this.db
-                        .prepare("INSERT OR IGNORE INTO schema_migrations (version) VALUES (?);")
-                        .run(migration.version);
-                } else {
-                    throw err;
-                }
-            }
+            runMigrationTx();
         }
     }
 }
