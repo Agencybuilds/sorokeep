@@ -8,7 +8,9 @@
 
 param(
     [string]$Repo = "TegoLabs/sorokeep",
-    [switch]$DryRun
+    [switch]$DryRun,
+    [int]$ThrottleMs = 900,
+    [string]$StateFile = "$PSScriptRoot/.created-issues.json"
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,6 +21,16 @@ if ($LASTEXITCODE -ne 0) { Write-Host "Run 'gh auth login' first." -ForegroundCo
 
 Write-Host "Target repo: $Repo" -ForegroundColor Cyan
 if ($DryRun) { Write-Host "DRY RUN - nothing will be created" -ForegroundColor Yellow }
+
+# Resume support. GitHub applies secondary rate limits to content creation, so a
+# 285-issue run can be interrupted. Every created issue is recorded immediately;
+# rerunning skips what already exists instead of duplicating it.
+$Created = @{}
+if ((Test-Path $StateFile) -and -not $DryRun) {
+    $loaded = Get-Content $StateFile -Raw | ConvertFrom-Json
+    foreach ($p in $loaded.PSObject.Properties) { $Created[$p.Name] = $p.Value }
+    Write-Host "Resuming: $($Created.Count) issues already created (from $StateFile)" -ForegroundColor Yellow
+}
 
 # --- Labels -----------------------------------------------------------------
 $AllLabels = @(
@@ -36,11 +48,18 @@ $AllLabels = @(
     'security',
     'sorokeep-integration',
     'testing',
-    '$Label'
+    $Label
 )
 if (-not $DryRun) {
+    # Create only what is missing. Never --force: this repo already has labels
+    # in use by hundreds of unrelated issues, and --force would reset their
+    # colour and description.
+    $existing = (gh label list --repo $Repo --limit 200 --json name | ConvertFrom-Json).name
     foreach ($l in $AllLabels) {
-        gh label create $l --repo $Repo --force 2>&1 | Out-Null
+        if ($existing -notcontains $l) {
+            gh label create $l --repo $Repo 2>&1 | Out-Null
+            Write-Host "  created label: $l" -ForegroundColor DarkGray
+        }
     }
 }
 
@@ -59,10 +78,28 @@ if (-not $DryRun) {
     }
 }
 
+# --- Pre-flight -------------------------------------------------------------
+# Verify every label and milestone an issue will reference actually exists.
+# Without this, a missing label fails all 285 creations one at a time.
+if (-not $DryRun) {
+    $haveLabels = (gh label list --repo $Repo --limit 200 --json name | ConvertFrom-Json).name
+    $missingLabels = $AllLabels | Where-Object { $haveLabels -notcontains $_ }
+    $haveMilestones = (gh api "repos/$Repo/milestones?state=all" --jq '.[].title') -split "`n"
+    $missingMilestones = $Milestones | Where-Object { $haveMilestones -notcontains $_ }
+    if ($missingLabels -or $missingMilestones) {
+        Write-Host "Pre-flight failed - nothing was created." -ForegroundColor Red
+        if ($missingLabels) { Write-Host "  missing labels:     $($missingLabels -join ', ')" -ForegroundColor Red }
+        if ($missingMilestones) { Write-Host "  missing milestones: $($missingMilestones -join ', ')" -ForegroundColor Red }
+        exit 1
+    }
+    Write-Host "Pre-flight OK: $($AllLabels.Count) labels, $($Milestones.Count) milestones present" -ForegroundColor Cyan
+}
+
 # --- Issue creation ---------------------------------------------------------
-# Issues are created in dependency order. $Created maps our internal id to the
-# real GitHub number, so "Depends on" lines reference actual issue numbers.
-$Created = @{}
+# Issues are created in dependency order, so "Depends on" lines can reference
+# the real GitHub numbers of issues already created.
+
+$script:FailCount = 0
 
 function New-LumensIssue {
     param(
@@ -70,18 +107,51 @@ function New-LumensIssue {
         [string]$Milestone, [string[]]$Labels
     )
     if ($DryRun) { Write-Host "  would create: $Title"; return $null }
+
+    if ($Created.ContainsKey($Id) -and $Created[$Id]) {
+        Write-Host "  skip  #$($Created[$Id])  $Id (already created)" -ForegroundColor DarkGray
+        return $Created[$Id]
+    }
+
     $tmp = New-TemporaryFile
     Set-Content -Path $tmp -Value $Body -Encoding utf8
     $labelArg = ($Labels + @($Label)) -join ","
-    $result = gh issue create --repo $Repo --title $Title --body-file $tmp --label $labelArg --milestone $Milestone
-    Remove-Item $tmp -Force
-    if ($result -match '/issues/(\d+)\s*$') {
-        $num = $Matches[1]
-        Write-Host "  #$num  $Id $Title" -ForegroundColor Green
-        return $num
+
+    $num = $null
+    foreach ($attempt in 1..3) {
+        $result = gh issue create --repo $Repo --title $Title --body-file $tmp --label $labelArg --milestone $Milestone 2>&1
+        if ($LASTEXITCODE -eq 0 -and ($result -match '/issues/(\d+)\s*$')) {
+            $num = $Matches[1]
+            break
+        }
+        $text = "$result"
+        # Only back off for things that might succeed later. A missing label or
+        # milestone, or a malformed request, will fail identically every time --
+        # retrying those just turns a fast failure into a two-minute one, and
+        # across 285 issues that is the difference between noticing immediately
+        # and walking away from a run that is going nowhere.
+        $transient = $text -match 'rate limit|abuse|secondary|timeout|503|502|EOF|connection'
+        if (-not $transient) {
+            Write-Host "  FAILED (not retryable): $Id - $text" -ForegroundColor Red
+            break
+        }
+        $wait = 20 * $attempt
+        Write-Host "  rate-limited, retry $attempt/3 in $wait s - $Id" -ForegroundColor Yellow
+        Start-Sleep -Seconds $wait
     }
-    Write-Host "  FAILED: $Id $Title" -ForegroundColor Red
-    return $null
+    Remove-Item $tmp -Force
+
+    if ($num) {
+        Write-Host "  #$num  $Id" -ForegroundColor Green
+        $Created[$Id] = $num
+        # Persist immediately so an interruption is resumable.
+        $Created | ConvertTo-Json -Compress | Set-Content -Path $StateFile -Encoding utf8
+    } else {
+        Write-Host "  FAILED after 3 attempts: $Id $Title" -ForegroundColor Red
+        $script:FailCount++
+    }
+    Start-Sleep -Milliseconds $ThrottleMs
+    return $num
 }
 
 
@@ -8907,4 +8977,10 @@ $body = $body -replace '\{\{DEPS\}\}', "$(if ($Created['E17-09']) { '#' + $Creat
 $Created['E17-14'] = New-LumensIssue -Id 'E17-14' -Title 'E17-14 Write the handover summary' -Body $body -Milestone 'LV5 - Frontend & Release' -Labels @('docs')
 
 Write-Host ""
-Write-Host "Done. Created $($Created.Values | Where-Object { $_ } | Measure-Object | Select-Object -ExpandProperty Count) of 285 issues." -ForegroundColor Cyan
+$ok = ($Created.Values | Where-Object { $_ } | Measure-Object).Count
+Write-Host "Created $ok of 285 issues." -ForegroundColor Cyan
+if ($script:FailCount -gt 0) {
+    Write-Host "$($script:FailCount) failed. Rerun this script to retry only the missing ones." -ForegroundColor Red
+    exit 1
+}
+if (-not $DryRun) { Write-Host "State: $StateFile" -ForegroundColor DarkGray }
