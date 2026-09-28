@@ -1,0 +1,74 @@
+name: Wave Auto-Label
+
+# Adds the Drips Wave labels to newly opened issues so they do not have to be
+# enrolled by hand.
+#
+# Two guards matter here, and the obvious version of this workflow has neither:
+#
+# 1. Skip machine-authored issues. e2e-nightly.yml opens an issue on every failed
+#    nightly run. 27 of those had accumulated before they were cleared out. An
+#    unguarded auto-labeller would enrol each one into a paid program as though it
+#    were contributor work.
+#
+# 2. Do not assign complexity. Complexity sets the point value, and a classifier
+#    calibrated against this repo's own hand-tiered issues only agreed with the
+#    maintainer about half the time -- the high/medium boundary depends on domain
+#    knowledge that is not in the issue text. Drips' guidance is that mis-priced
+#    points damage trust, so a human assigns the tier. `scripts/wave-enroll.mjs`
+#    will suggest one.
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    # Never enrol anything a bot opened.
+    if: github.event.issue.user.type != 'Bot'
+    steps:
+      - name: Add Wave labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = context.payload.issue.title || "";
+            const author = context.payload.issue.user.login || "";
+
+            // Titles that are automation output rather than work to be done.
+            const AUTOMATED_TITLE = /nightly e2e sandbox suite failed|^\s*⚠️|dependabot/i;
+            if (AUTOMATED_TITLE.test(title)) {
+              core.info(`Skipping automated issue: "${title}"`);
+              return;
+            }
+            if (/\[bot\]$/i.test(author)) {
+              core.info(`Skipping bot author: ${author}`);
+              return;
+            }
+
+            // Both labels, because every issue already enrolled in this repo
+            // carries both and it is not documented which one Drips reads.
+            const labels = ["Stellar Wave", "stellar-wave"];
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels,
+            });
+            core.info(`Enrolled #${context.issue.number}: ${labels.join(", ")}`);
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                "Added to the Stellar Wave program.",
+                "",
+                "A maintainer still needs to set a complexity tier "
+                  + "(`complexity:trivial` / `complexity:medium` / `complexity:high`), "
+                  + "which determines the point value. That is assigned by hand rather "
+                  + "than inferred, so the points reflect the real scope of the work.",
+              ].join("\n"),
+            });
