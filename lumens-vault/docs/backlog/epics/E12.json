@@ -1,0 +1,315 @@
+{
+  "epic": "E12",
+  "title": "Backend: Read API & Observability",
+  "milestone": "LV3 - Integrations",
+  "issues": [
+    {
+      "id": "E12-01",
+      "title": "Define the read API contract before implementing endpoints",
+      "labels": ["backend", "docs"],
+      "requirements": ["FR-17", "FR-22", "NFR-4"],
+      "dependsOn": ["E07-19"],
+      "scope": "The frontend binds to this API and frontend work is blocked behind design approval, so the contract should be settled first and independently. Defining it up front also forces the NFR-4 question to be answered per field: which values are cached and possibly stale, and which must be checked on-chain.",
+      "files": ["lumens-vault/docs/api.md (new)"],
+      "acceptance": [
+        "Every endpoint is specified with method, path, parameters, response shape and error responses",
+        "Amounts are strings in JSON, never numbers — i128 values exceed what JSON numbers represent safely, and this must be stated as a rule for the whole API",
+        "Every response carries enough freshness information for a client to judge staleness: at minimum the ledger the data reflects",
+        "Each field is marked as either cached display data or authoritative, and the doc states that withdraw eligibility is never decided from this API",
+        "Error response shape is consistent across endpoints and defined once"
+      ],
+      "nonGoals": ["No implementation. No OpenAPI tooling at this size unless it earns its keep."]
+    },
+    {
+      "id": "E12-02",
+      "title": "Add request validation and error handling middleware",
+      "labels": ["backend"],
+      "requirements": ["NFR-4", "G-24"],
+      "dependsOn": ["E12-01", "E07-17"],
+      "scope": "Every endpoint takes untrusted input, most commonly a Stellar address from a URL path. Validate centrally so each handler does not reinvent it, and map internal errors to responses without leaking internals.",
+      "files": [
+        "lumens-vault/backend/src/api/middleware.ts (new)",
+        "lumens-vault/backend/test/api/middleware.test.ts (new)"
+      ],
+      "acceptance": [
+        "Address parameters are validated for shape before reaching a handler; an invalid one returns 400 with a clear message",
+        "Pagination parameters are validated and bounded, so a client cannot request an unbounded result set",
+        "Internal errors return 500 with a generic message while the detail goes to the log — no stack trace or SQL reaches the client",
+        "The error taxonomy from E07-17 maps to status codes consistently",
+        "Tests cover a valid request, a malformed address, an out-of-range limit, and an internal failure"
+      ],
+      "nonGoals": ["No authentication; the read API is public data."]
+    },
+    {
+      "id": "E12-03",
+      "title": "Implement the my-vaults endpoint",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "FR-22"],
+      "dependsOn": ["E12-02", "E09-05"],
+      "scope": "The endpoint behind the vault list: every vault for an address with balance, asset, lock state and unlock ledger. This is the most-used endpoint in the product.",
+      "files": [
+        "lumens-vault/backend/src/api/vaults.ts (new)",
+        "lumens-vault/backend/test/api/vaults.test.ts (new)"
+      ],
+      "acceptance": [
+        "Returns all vaults for an address with amounts as strings",
+        "Each vault includes unlockLedger and the current ledger, so a client can compute lock state without a second call and without its own clock",
+        "Vaults flagged with incomplete history by E09-11 are marked, and the client is told the balance is not trustworthy rather than being shown a number",
+        "An address with no vaults returns an empty array and 200, not 404",
+        "A comment and the API doc both state that a vault appearing unlocked here does not guarantee a withdrawal will succeed — the contract decides"
+      ],
+      "nonGoals": ["No valuation in this endpoint; that is E12-06."]
+    },
+    {
+      "id": "E12-04",
+      "title": "Implement the single-vault detail endpoint",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "FR-22"],
+      "dependsOn": ["E12-03"],
+      "scope": "One vault with its full event history, for a detail view. The history is what lets a user see their own deposits and withdrawals rather than only a current balance.",
+      "files": [
+        "lumens-vault/backend/src/api/vault-detail.ts (new)",
+        "lumens-vault/backend/test/api/vault-detail.test.ts (new)"
+      ],
+      "acceptance": [
+        "Returns the vault's current state plus its ordered event history with ledger and timestamp per event",
+        "A nonexistent vault returns 404 with a clear body",
+        "Amounts are strings throughout",
+        "History is ordered oldest first and the ordering is documented, since a client will render it directly",
+        "A partial-withdrawal history is covered by a test, asserting each event shows the amount moved rather than the running balance"
+      ],
+      "nonGoals": ["No on-chain verification call; that is E12-05."]
+    },
+    {
+      "id": "E12-05",
+      "title": "Add an on-chain verification endpoint for withdraw eligibility",
+      "labels": ["backend", "security"],
+      "requirements": ["NFR-4", "FR-3"],
+      "dependsOn": ["E12-04", "E08-01"],
+      "scope": "NFR-4 requires withdraw eligibility to be decided by a live on-chain check, never by the cache. Providing that as an endpoint means the frontend has a correct option available rather than being tempted to use the cached value because it is the only thing offered.",
+      "files": [
+        "lumens-vault/backend/src/api/verify.ts (new)",
+        "lumens-vault/backend/test/api/verify.test.ts (new)"
+      ],
+      "acceptance": [
+        "The endpoint calls the contract's get_vault directly and returns the live values, bypassing the cache entirely",
+        "It also returns live is_paused, since a paused contract blocks withdrawal regardless of lock state",
+        "The response makes clear it is live rather than cached, and includes the ledger it was read at",
+        "An RPC failure returns an explicit error rather than silently falling back to cached data — falling back would defeat the entire purpose",
+        "A test asserts no cache read occurs on this path"
+      ],
+      "nonGoals": ["Not building the transaction; the frontend does that."]
+    },
+    {
+      "id": "E12-06",
+      "title": "Implement the portfolio valuation endpoint",
+      "labels": ["backend"],
+      "requirements": ["FR-19", "FR-22"],
+      "dependsOn": ["E12-03", "E11-10"],
+      "scope": "The dashboard's USD total, with the price status the guards produced. The status is part of the contract, not a detail — a total shown without it is misleading.",
+      "files": [
+        "lumens-vault/backend/src/api/valuation.ts (new)",
+        "lumens-vault/backend/test/api/valuation.test.ts (new)"
+      ],
+      "acceptance": [
+        "Returns the total and a per-asset breakdown, each with its price status and the price used",
+        "The overall status reflects the worst constituent status",
+        "Assets that could not be valued are listed explicitly rather than omitted",
+        "When no asset can be valued, the response is an unavailable status rather than a zero total",
+        "Tests cover all-fresh, mixed, and all-unavailable"
+      ],
+      "nonGoals": ["No historical valuation."]
+    },
+    {
+      "id": "E12-07",
+      "title": "Implement the whitelist endpoint",
+      "labels": ["backend"],
+      "requirements": ["FR-11", "FR-21"],
+      "dependsOn": ["E12-02", "E09-07"],
+      "scope": "The deposit form's asset dropdown. Since the contract cannot enumerate its whitelist, this derived view is the only source available.",
+      "files": [
+        "lumens-vault/backend/src/api/whitelist.ts (new)",
+        "lumens-vault/backend/test/api/whitelist.test.ts (new)"
+      ],
+      "acceptance": [
+        "Returns currently whitelisted assets with their decimals, which the deposit form needs to format input correctly",
+        "Delisted assets are included with a flag rather than omitted, so a UI can explain why an existing vault's asset is unavailable for new deposits",
+        "The response states the ledger the derivation reflects",
+        "A test asserts the endpoint's output matches live is_whitelisted calls for every asset returned"
+      ],
+      "nonGoals": ["No asset metadata beyond what is needed; no icons or display names."]
+    },
+    {
+      "id": "E12-08",
+      "title": "Implement the contract-state endpoint",
+      "labels": ["backend"],
+      "requirements": ["FR-10", "FR-13", "FR-21"],
+      "dependsOn": ["E12-02", "E09-13", "E09-14"],
+      "scope": "Paused state, current admin and lock bounds in one call, so the frontend can configure its deposit form and explain unavailable actions without three round trips.",
+      "files": [
+        "lumens-vault/backend/src/api/contract-state.ts (new)",
+        "lumens-vault/backend/test/api/contract-state.test.ts (new)"
+      ],
+      "acceptance": [
+        "Returns paused state, admin address, and lock bounds with the ledger each reflects",
+        "FR-21 requires the deposit picker to read live bounds; state clearly in the response and the API doc whether these values are cached or live, and if cached, direct the client to E12-05's live path when correctness matters",
+        "A test asserts the values match the contract's own view functions",
+        "The contract id and network are included, so a misconfigured frontend fails visibly rather than showing another contract's data"
+      ],
+      "nonGoals": ["No admin write operations; this API is read-only."]
+    },
+    {
+      "id": "E12-09",
+      "title": "Implement the admin activity endpoint",
+      "labels": ["backend"],
+      "requirements": ["FR-18", "FR-23"],
+      "dependsOn": ["E12-02", "E09-08"],
+      "scope": "Recent admin actions for the Operations page. This is the only surface anywhere in the system showing pause, upgrade and admin transfer events, since Sorokeep does not track them.",
+      "files": [
+        "lumens-vault/backend/src/api/admin-activity.ts (new)",
+        "lumens-vault/backend/test/api/admin-activity.test.ts (new)"
+      ],
+      "acceptance": [
+        "Returns recent actions newest first with type, actor, ledger, timestamp and a typed payload",
+        "Supports a bounded limit and filtering by action type",
+        "Upgrade entries include the new wasm hash so an operator can compare it against what was intended",
+        "A test covers every action type appearing correctly",
+        "The response states how far ingestion has progressed, so an empty list caused by lag is distinguishable from genuinely no activity"
+      ],
+      "nonGoals": ["No alerting; that happens at ingestion."]
+    },
+    {
+      "id": "E12-10",
+      "title": "Implement the Sorokeep alerts endpoint",
+      "labels": ["backend", "sorokeep-integration"],
+      "requirements": ["FR-16", "FR-23"],
+      "dependsOn": ["E12-02", "E07-13"],
+      "scope": "The stored TTL alerts, for the Operations page timeline. Pairing a crossing with its later resolution is what turns a list of events into a usable history.",
+      "files": [
+        "lumens-vault/backend/src/api/sorokeep-alerts.ts (new)",
+        "lumens-vault/backend/test/api/sorokeep-alerts.test.ts (new)"
+      ],
+      "acceptance": [
+        "Returns stored alerts newest first with entry, severity, threshold values and timestamps",
+        "Threshold crossings are correlated with their resolutions where both exist, so the UI can show a resolved incident rather than two unrelated rows",
+        "Filtering by severity and by unresolved-only is supported",
+        "Both the alert's own timestamp and the received timestamp are returned, so clock differences are visible",
+        "A test covers a crossing followed by its resolution"
+      ],
+      "nonGoals": ["No live TTL state here; that is E12-13."]
+    },
+    {
+      "id": "E12-11",
+      "title": "Implement the ingestion status endpoint",
+      "labels": ["backend"],
+      "requirements": ["G-24", "NFR-4"],
+      "dependsOn": ["E12-02", "E08-15", "E08-14"],
+      "scope": "Expose how fresh the cache actually is. Without it, a stale dashboard is indistinguishable from an idle contract, which is the most confusing failure this system can present.",
+      "files": [
+        "lumens-vault/backend/src/api/ingestion-status.ts (new)",
+        "lumens-vault/backend/test/api/ingestion-status.test.ts (new)"
+      ],
+      "acceptance": [
+        "Returns cursor position, latest known ledger, lag in ledgers and approximate real time, and the last successful cycle time",
+        "Any detected history gap from E08-14 is reported, including the affected ledger range",
+        "A simple healthy or degraded judgement is included so a UI does not have to encode the thresholds",
+        "A test covers healthy, lagging, and gap-detected states"
+      ],
+      "nonGoals": ["No metrics exporter."]
+    },
+    {
+      "id": "E12-12",
+      "title": "Add an event history endpoint for a user",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "FR-22"],
+      "dependsOn": ["E12-03"],
+      "scope": "A user's deposits and withdrawals across all their vaults, for an activity view. Distinct from per-vault history because users think in terms of what they did, not which vault it touched.",
+      "files": [
+        "lumens-vault/backend/src/api/user-events.ts (new)",
+        "lumens-vault/backend/test/api/user-events.test.ts (new)"
+      ],
+      "acceptance": [
+        "Returns deposit and withdrawal events for an address across all vaults, newest first, paginated",
+        "Each event carries the asset, vault id, amount as a string, ledger and timestamp",
+        "Pagination is stable — a client paging through while new events arrive does not silently skip or repeat entries; state the mechanism used",
+        "An address with no activity returns an empty page, not 404"
+      ],
+      "nonGoals": ["No CSV export."]
+    },
+    {
+      "id": "E12-13",
+      "title": "Implement live TTL status via the chosen Sorokeep data source",
+      "labels": ["backend", "sorokeep-integration"],
+      "requirements": ["FR-23", "D-4"],
+      "dependsOn": ["E10-12", "E12-02"],
+      "scope": "The Operations page needs current TTL health per entry and guard state, not only the alerts that have fired. Implement whichever source E10-12 decided on, behind an interface so the decision can be revisited without touching the API layer.",
+      "files": [
+        "lumens-vault/backend/src/adapters/sorokeep-status/index.ts (new)",
+        "lumens-vault/backend/src/api/ttl-status.ts (new)",
+        "lumens-vault/backend/test/adapters/sorokeep-status/index.test.ts (new)"
+      ],
+      "acceptance": [
+        "The mechanism matches ADR 0013 exactly; deviating requires updating the ADR in the same PR",
+        "Returns per-entry TTL, guard configuration, and recent extension history",
+        "Sorokeep being unavailable degrades cleanly — the Operations page shows the stored alerts it already has rather than erroring",
+        "If reading Sorokeep's database directly was chosen, access is strictly read-only and a test or comment records how that is enforced; writing to another tool's database is never acceptable",
+        "Verified against the live Sorokeep instance with output pasted"
+      ],
+      "nonGoals": ["No TTL polling of the chain directly; that duplicates Sorokeep."]
+    },
+    {
+      "id": "E12-14",
+      "title": "Add API integration tests across all endpoints",
+      "labels": ["backend", "testing"],
+      "requirements": ["FR-17", "FR-22", "FR-23"],
+      "dependsOn": ["E12-03", "E12-06", "E12-07", "E12-08", "E12-09", "E12-10", "E12-11"],
+      "scope": "Handler unit tests use stubbed repositories. One pass through the real stack against a seeded database catches serialisation and wiring defects those cannot.",
+      "files": ["lumens-vault/backend/test/api/integration.test.ts (new)"],
+      "acceptance": [
+        "A seeded in-memory database is ingested from fixtures, then every endpoint is called against the running server",
+        "Response shapes are asserted against the documented contract in docs/api.md — a drift between the two fails the test",
+        "A test asserts no numeric amount appears anywhere in any response body, which is the single most likely serialisation regression",
+        "Error paths are covered for each endpoint, not only success paths",
+        "Runs in CI without network access"
+      ],
+      "nonGoals": ["Full-stack E2E with the frontend is E17."]
+    },
+    {
+      "id": "E12-15",
+      "title": "Add CORS and basic request limits",
+      "labels": ["backend", "security"],
+      "requirements": ["NFR-1"],
+      "dependsOn": ["E12-02"],
+      "scope": "The frontend runs on a different origin and needs CORS. The API is public and unauthenticated, so an unbounded request rate against an endpoint that hits SQLite and RPC is a cheap way to break it.",
+      "files": [
+        "lumens-vault/backend/src/api/security.ts (new)",
+        "lumens-vault/backend/test/api/security.test.ts (new)"
+      ],
+      "acceptance": [
+        "CORS allows the configured frontend origin and is not a wildcard in production configuration",
+        "A per-IP request limit applies, with a stated default and reasoning",
+        "The live verification endpoint from E12-05 has a tighter limit, since each call costs an RPC request",
+        "Exceeding a limit returns 429 with a Retry-After header rather than dropping the connection",
+        "Tests cover an allowed origin, a disallowed one, and a limit being exceeded"
+      ],
+      "nonGoals": ["No authentication or API keys."]
+    },
+    {
+      "id": "E12-16",
+      "title": "Finalise the API documentation against the implementation",
+      "labels": ["backend", "docs"],
+      "requirements": ["NFR-7", "FR-22"],
+      "dependsOn": ["E12-14", "E12-13", "E12-15"],
+      "scope": "docs/api.md was written before the endpoints existed. Reconcile it with what was actually built, since the frontend epics will code against this document.",
+      "files": ["lumens-vault/docs/api.md (edit)"],
+      "acceptance": [
+        "Every endpoint's documented shape matches a real response; paste one real example per endpoint",
+        "Any difference between the original contract and the implementation is resolved in one direction with a stated reason",
+        "The cached-versus-authoritative marking is present per field and consistent with what E12-05 provides",
+        "Rate limits and CORS behaviour are documented, so a frontend contributor is not surprised by a 429",
+        "The document states the commit it describes"
+      ],
+      "nonGoals": ["No client SDK generation."]
+    }
+  ]
+}

@@ -1,0 +1,247 @@
+{
+  "epic": "E01",
+  "title": "Repo Hygiene & Project Foundation",
+  "milestone": "LV0 - Foundation",
+  "issues": [
+    {
+      "id": "E01-01",
+      "title": "Remove the nested empty git repository that blocks all commits",
+      "labels": ["devops", "bug", "good first issue"],
+      "requirements": ["G-1"],
+      "dependsOn": [],
+      "scope": "lumens-vault/.git is an empty repository with zero commits and no remote, left behind by a zip extraction. Git refuses to stage the folder while it exists, so no work in this project can be committed until it is gone. This is the first issue in the backlog and everything else is transitively behind it.",
+      "files": ["lumens-vault/.git (delete)"],
+      "acceptance": [
+        "Confirm the nested repo is genuinely empty before deleting: `git -C lumens-vault log --oneline` reports no commits, and `git -C lumens-vault remote -v` prints nothing",
+        "Delete the directory with `Remove-Item -Recurse -Force lumens-vault\\.git`",
+        "`git add -n lumens-vault/` now succeeds instead of failing with \"does not have a commit checked out\" — paste both the before and after output",
+        "`git status` from the repo root lists lumens-vault/ contents as untracked, and shows nothing changed outside lumens-vault/"
+      ],
+      "nonGoals": ["Do not commit anything yet; E01-14 makes the first commit once hygiene is complete."]
+    },
+    {
+      "id": "E01-02",
+      "title": "Delete the superseded lumens-vault-backup-original source copy",
+      "labels": ["devops", "security", "good first issue"],
+      "requirements": ["G-6"],
+      "dependsOn": ["E01-01"],
+      "scope": "contracts/lumens-vault-backup-original/ holds the pre-fix contract as loose .rs files with no Cargo.toml, so it sits in contracts/ looking like a crate while being dead code. It is the known-vulnerable version: a front-runnable unauthenticated `initialize`, and deposit/withdraw with no amount validation. Leaving it where a contributor can read or copy from it is a live hazard.",
+      "files": ["lumens-vault/contracts/lumens-vault-backup-original/ (delete)"],
+      "acceptance": [
+        "Confirm the current contract supersedes it: `__constructor` exists in src/contract.rs and there is no `initialize` function",
+        "Delete the directory",
+        "`cargo test` still passes 5/5 afterwards, proving nothing referenced it",
+        "`stellar contract build` still succeeds"
+      ],
+      "nonGoals": ["Do not delete lumens-vault-v2-fixture/ — that crate is load-bearing for the upgrade test."]
+    },
+    {
+      "id": "E01-03",
+      "title": "Delete the stale duplicate test snapshot directory",
+      "labels": ["devops", "good first issue"],
+      "requirements": ["G-5", "D-7"],
+      "dependsOn": ["E01-01"],
+      "scope": "contracts/lumens-vault/test/ duplicates test_snapshots/test/ and additionally holds test_upgrade_and_state_migration.1.json, an orphan from a test that was since renamed. soroban-sdk writes to test_snapshots/ only; the test/ copy is frozen and misleading.",
+      "files": ["lumens-vault/contracts/lumens-vault/test/ (delete)"],
+      "acceptance": [
+        "Demonstrate which directory is live: run `cargo test`, then compare modification times — test_snapshots/test/ updates, test/ does not",
+        "Delete contracts/lumens-vault/test/",
+        "`cargo test` passes 5/5 and regenerates test_snapshots/test/ with exactly 5 files, one per test"
+      ],
+      "nonGoals": ["Deciding whether test_snapshots/ is committed or gitignored is E01-04."]
+    },
+    {
+      "id": "E01-04",
+      "title": "Decide and document whether test_snapshots/ is committed or ignored",
+      "labels": ["devops", "docs"],
+      "requirements": ["D-7", "NFR-7"],
+      "dependsOn": ["E01-03"],
+      "scope": "soroban-sdk regenerates test_snapshots/ on every test run. Committing them makes diffs noisy but catches unintended state changes; ignoring them keeps the tree clean but loses that signal. Pick one deliberately and record the reasoning so it is not re-litigated.",
+      "files": [
+        "lumens-vault/contracts/lumens-vault/.gitignore (edit, if ignoring)",
+        "lumens-vault/docs/adr/0001-test-snapshots.md (new)"
+      ],
+      "acceptance": [
+        "A short ADR records the decision, the tradeoff considered, and the date",
+        "If ignoring: .gitignore excludes test_snapshots/ and `git status` confirms the files disappear from the untracked list",
+        "If committing: the 5 current snapshots are staged and a note explains that regenerated diffs are expected on test changes"
+      ],
+      "nonGoals": ["No change to any test."]
+    },
+    {
+      "id": "E01-05",
+      "title": "Move the four port interface files out of contracts/ into a staging location",
+      "labels": ["backend", "devops"],
+      "requirements": ["G-4"],
+      "dependsOn": ["E01-01"],
+      "scope": "event-source.ts, price-oracle.ts, alert-sink.ts and persistence.ts are TypeScript sitting inside contracts/, a Rust crate folder. They are good, type-checked interfaces and must not be rewritten — only relocated. backend/ does not exist yet, so park them where E07 can pick them up.",
+      "files": [
+        "lumens-vault/contracts/event-source.ts (move)",
+        "lumens-vault/contracts/price-oracle.ts (move)",
+        "lumens-vault/contracts/alert-sink.ts (move)",
+        "lumens-vault/contracts/persistence.ts (move)"
+      ],
+      "acceptance": [
+        "All four files moved to lumens-vault/docs/backlog/ports-staging/ with their content byte-identical — verify with a diff against the originals before deleting",
+        "contracts/ contains only Rust crates and no .ts files afterwards",
+        "A one-line note in the staging folder's README says these become backend/src/ports/ in E07-04"
+      ],
+      "nonGoals": ["Do not edit the interfaces. Do not create backend/ — that is E07-01."]
+    },
+    {
+      "id": "E01-06",
+      "title": "Strip stale assistant-voice comments from the contract sources",
+      "labels": ["contract", "docs", "good first issue"],
+      "requirements": ["G-3"],
+      "dependsOn": ["E01-01"],
+      "scope": "Five files carry first-person commentary written by a tool that could not compile the code, including a banner in test.rs beginning \"I could not run any of this\" which is now demonstrably false — the suite passes and the contract builds to wasm. Keep every piece of technical content; remove the voice, the apologies and the obsolete claims.",
+      "files": [
+        "lumens-vault/contracts/lumens-vault/src/test.rs (edit)",
+        "lumens-vault/contracts/lumens-vault/src/contract.rs (edit)",
+        "lumens-vault/contracts/lumens-vault/src/events.rs (edit)",
+        "lumens-vault/contracts/lumens-vault/src/lib.rs (edit)",
+        "lumens-vault/contracts/lumens-vault/src/storage.rs (edit)"
+      ],
+      "acceptance": [
+        "The \"I could not run any of this\" banner in test.rs is gone; the build-order instructions for the upgrade fixture that followed it are kept and rewritten in neutral voice",
+        "contract.rs's \"CHANGE LOG vs. the version reviewed\" block is replaced by durable comments on the functions the fixes affect, so the rationale survives without reading as a diff narrative",
+        "\"UNCHANGED from the version reviewed\" headers removed from lib.rs, storage.rs and events.rs",
+        "`grep -rn \"I could not\\|in my head\\|version reviewed\" contracts/` returns nothing",
+        "`cargo test` passes 5/5 — comment-only changes must not alter behaviour"
+      ],
+      "nonGoals": ["No logic changes. No renaming. No reformatting beyond the comment blocks touched."]
+    },
+    {
+      "id": "E01-07",
+      "title": "Write the missing lumens-vault README",
+      "labels": ["docs"],
+      "requirements": ["G-2", "G-19"],
+      "dependsOn": ["E01-01"],
+      "scope": "lumens-vault/README.md does not exist, yet CONTRIBUTING.md tells contributors \"Build and test commands are in the root README.md\". Write it: what the project is, how it relates to Sorokeep, verified build and test commands, and the repo layout.",
+      "files": ["lumens-vault/README.md (new)"],
+      "acceptance": [
+        "States what Lumens Vault is in two or three sentences, and that it is developed inside the sorokeep repo for Drips Wave 9 before moving to its own repository",
+        "Attribution reads \"Drips Wave 9 (Stellar)\" — not \"Stellar Community Fund's Drips Wave 9\", which was never verified",
+        "Build and test sections give the real PowerShell commands, including that the fixture must be built before `cargo test` because contractimport! reads its wasm at compile time",
+        "Every command in the README has actually been run, and the PR shows the output",
+        "Links to docs/TECH_SPEC.md, docs/SYSTEM_DESIGN.md and CONTRIBUTING.md resolve"
+      ],
+      "nonGoals": ["No badges for CI that does not exist yet. No license section — that is E01-08."]
+    },
+    {
+      "id": "E01-08",
+      "title": "Add a LICENSE for lumens-vault",
+      "labels": ["docs"],
+      "requirements": ["G-21"],
+      "dependsOn": ["E01-07"],
+      "scope": "The folder becomes its own repository after Wave 9 and currently has no license of its own. Sorokeep is MIT; confirm with the maintainer whether Lumens Vault matches before writing the file, rather than assuming inheritance.",
+      "files": [
+        "lumens-vault/LICENSE (new)",
+        "lumens-vault/README.md (edit)"
+      ],
+      "acceptance": [
+        "The maintainer has confirmed the license choice in the issue thread before the file is written",
+        "LICENSE contains the full, unmodified text with the correct copyright holder and year",
+        "README gains a short License section pointing at it"
+      ],
+      "nonGoals": ["Not changing sorokeep's own LICENSE."]
+    },
+    {
+      "id": "E01-09",
+      "title": "Correct the stale OPEN markers in TECH_SPEC that contradict decided requirements",
+      "labels": ["docs"],
+      "requirements": ["G-18", "FR-2", "NFR-7"],
+      "dependsOn": ["E01-01"],
+      "scope": "TECH_SPEC FR-2 still poses the required-vs-default lock question as OPEN, and Open Questions 1 and 2 remain listed, but PROJECT_HANDOFF §3.1 records both as decided by the maintainer: lock_ledgers is always required, and bounds are global. Because the handoff's own rule is that the docs win on conflict, leaving this stale propagates the wrong answer to anyone who reads only the spec.",
+      "files": ["lumens-vault/docs/TECH_SPEC.md (edit)"],
+      "acceptance": [
+        "FR-2's OPEN sub-question is replaced by the decision: lock_ledgers always required, no default fallback",
+        "Open Question 1 and Open Question 2 are marked DECIDED with the answer and the date, in the same style as the already-struck Question 6",
+        "No other requirement's status is changed",
+        "A reader of TECH_SPEC alone now reaches the same conclusion as a reader of PROJECT_HANDOFF"
+      ],
+      "nonGoals": ["Do not resolve Open Questions 3, 4 or 5 here — those need live verification and are owned by D-1, D-2 and D-3."]
+    },
+    {
+      "id": "E01-10",
+      "title": "Fix CONTRIBUTING's dangling references",
+      "labels": ["docs", "good first issue"],
+      "requirements": ["G-19"],
+      "dependsOn": ["E01-07"],
+      "scope": "CONTRIBUTING.md points at a README that did not exist until E01-07, and tells contributors what to do if an issue is labelled `blocked` — a label the handoff addendum deliberately removed because it went stale immediately.",
+      "files": ["lumens-vault/CONTRIBUTING.md (edit)"],
+      "acceptance": [
+        "The README reference resolves to the file E01-07 created",
+        "The `blocked` label paragraph is replaced by guidance to read the issue's own Depends on section",
+        "Every other link in the file is checked and resolves; list them in the PR"
+      ],
+      "nonGoals": ["No rewrite of the two hard-won rules sections — they stay as written."]
+    },
+    {
+      "id": "E01-11",
+      "title": "Add a CI workflow running cargo test on the contract",
+      "labels": ["devops", "testing"],
+      "requirements": ["G-15"],
+      "dependsOn": ["E01-01"],
+      "scope": "Nothing currently runs the test suite on a pull request. For a project taking external contributors this means a broken PR is only caught by whoever reviews it by hand. Add a workflow scoped to paths under lumens-vault/contracts/ so it does not fire on unrelated sorokeep changes.",
+      "files": [".github/workflows/lumens-vault-contract.yml (new)"],
+      "acceptance": [
+        "Triggers on pull_request and push, filtered to `lumens-vault/contracts/**`",
+        "Installs the pinned Rust toolchain and the wasm32v1-none target",
+        "Builds the v2 fixture before running `cargo test`, because contractimport! needs its wasm at compile time — a workflow that skips this will fail",
+        "Runs `cargo test` in contracts/lumens-vault and fails the job on any test failure",
+        "The workflow has run green on the PR that introduces it; link the run"
+      ],
+      "nonGoals": ["No backend or frontend CI — those are E06-09 and E06-10. No release automation."]
+    },
+    {
+      "id": "E01-12",
+      "title": "Add stellar contract build to the contract CI workflow",
+      "labels": ["devops"],
+      "requirements": ["G-15", "NFR-1"],
+      "dependsOn": ["E01-11"],
+      "scope": "Native `cargo test` passing does not prove the contract still compiles to the only target Soroban runs. The two can diverge — no_std violations and target-specific failures surface only on a wasm build.",
+      "files": [".github/workflows/lumens-vault-contract.yml (edit)"],
+      "acceptance": [
+        "The workflow installs stellar-cli at a pinned version and runs `stellar contract build`",
+        "The job fails if the build fails",
+        "The produced wasm size is printed in the log so unexpected growth is visible in review",
+        "The run is green on the introducing PR; link it"
+      ],
+      "nonGoals": ["No size-regression gate yet — establish the baseline first."]
+    },
+    {
+      "id": "E01-13",
+      "title": "Add a PR template carrying this project's verification rules",
+      "labels": ["docs", "devops"],
+      "requirements": ["NFR-7", "G-25"],
+      "dependsOn": ["E01-10"],
+      "scope": "CONTRIBUTING sets two hard rules — show real command output, and verify against primary sources — but nothing puts them in front of a contributor at the moment they open a PR. A template makes them unavoidable.",
+      "files": [".github/PULL_REQUEST_TEMPLATE/lumens-vault.md (new)"],
+      "acceptance": [
+        "Prompts for the issue ID being closed, every file changed, and pasted output for each acceptance criterion that asks for verification",
+        "Includes an explicit checkbox that nothing outside lumens-vault/ was modified",
+        "Includes a checkbox confirming no secret key, webhook secret or token appears in the diff",
+        "Mentioned in CONTRIBUTING so contributors know it exists"
+      ],
+      "nonGoals": ["Do not replace sorokeep's own PR template; add a separate one."]
+    },
+    {
+      "id": "E01-14",
+      "title": "Make the first commit of lumens-vault on a branch",
+      "labels": ["devops"],
+      "requirements": ["G-1", "NFR-7"],
+      "dependsOn": ["E01-02", "E01-03", "E01-05", "E01-06", "E01-07", "E01-09", "E01-10"],
+      "scope": "Nothing in this project has ever been committed. Once hygiene is clean, land it all on a branch so subsequent work has a baseline to diff against and the maintainer has a single reviewable starting point.",
+      "files": [],
+      "acceptance": [
+        "`git status` is inspected before staging and the PR shows it — nothing outside lumens-vault/ is included, no target/ directory, no nested .git",
+        "`git check-ignore -v` confirms target/ directories are excluded for both crates",
+        "The diff is scanned for secrets before pushing; the PR states this was done",
+        "Commit message follows conventional format and describes the hygiene pass, not the whole project",
+        "`cargo test` 5/5 and `stellar contract build` both pass at the committed tree state, with output in the PR"
+      ],
+      "nonGoals": ["Do not push to main. Do not create the GitHub issues yet — that needs the maintainer's confirmation on D-5."]
+    }
+  ]
+}

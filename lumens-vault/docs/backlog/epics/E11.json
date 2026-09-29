@@ -1,0 +1,303 @@
+{
+  "epic": "E11",
+  "title": "Backend: Reflector Valuation",
+  "milestone": "LV3 - Integrations",
+  "issues": [
+    {
+      "id": "E11-01",
+      "title": "Verify the Reflector contract addresses from primary sources",
+      "labels": ["backend", "security"],
+      "requirements": ["FR-19", "NFR-7"],
+      "dependsOn": ["E07-03"],
+      "scope": "Oracle contract addresses are the one input here that cannot be wrong safely — pointing at the wrong contract yields prices that look plausible and are not. This project's documents contain at least one instance of an external fact stated confidently and incorrectly, so take these only from Reflector's official documentation and cross-check independently.",
+      "files": ["lumens-vault/docs/reflector.md (new)"],
+      "acceptance": [
+        "Testnet and mainnet oracle contract addresses are taken from Reflector's official documentation, with the URL and access date recorded",
+        "Each is cross-checked on stellar.expert and confirmed to exist and be active; paste the evidence",
+        "No address is copied from memory, from another project, or from any secondary source — state explicitly where each came from",
+        "Which oracle feed each address serves is recorded, since Reflector runs several and they cover different asset sets",
+        "Addresses go into configuration, never into source"
+      ],
+      "nonGoals": ["No client implementation yet."]
+    },
+    {
+      "id": "E11-02",
+      "title": "Document the SEP-40 interface surface actually used",
+      "labels": ["backend", "docs"],
+      "requirements": ["FR-19"],
+      "dependsOn": ["E11-01"],
+      "scope": "SEP-40 defines base, assets, decimals, resolution, price, prices and lastprice with Asset and PriceData types. Establish the exact shapes against the deployed contract before writing a client against an assumed interface.",
+      "files": ["lumens-vault/docs/reflector.md (edit)"],
+      "acceptance": [
+        "The functions this project calls are listed with their real argument and return types, read from the deployed contract's interface rather than the specification alone",
+        "The Asset type's variants are documented — assets may be identified by contract address or by symbol, and which applies to this project's whitelisted assets is stated",
+        "PriceData's fields and the meaning of its timestamp are recorded",
+        "The relationship between decimals and the raw price integer is stated with a worked example, since getting the scale wrong produces valuations off by orders of magnitude"
+      ],
+      "nonGoals": ["No implementation."]
+    },
+    {
+      "id": "E11-03",
+      "title": "Build the Reflector simulation-only client",
+      "labels": ["backend"],
+      "requirements": ["FR-19"],
+      "dependsOn": ["E11-02", "E08-01"],
+      "scope": "Price reads are simulation-only: no signing, no transaction submission, no fees. A read path that can accidentally submit a transaction is a real hazard, so make that structurally impossible rather than merely intended.",
+      "files": [
+        "lumens-vault/backend/src/adapters/reflector/client.ts (new)",
+        "lumens-vault/backend/test/adapters/reflector/client.test.ts (new)"
+      ],
+      "acceptance": [
+        "Reads go through transaction simulation only; the client holds no keypair and has no code path that signs or submits",
+        "The oracle address comes from configuration",
+        "A simulation error maps to the transient error class rather than propagating raw SDK errors",
+        "A test asserts no signing or submission method is reachable from this client — state how this was verified",
+        "Tests use stubbed simulation responses; CI must not depend on the live oracle"
+      ],
+      "nonGoals": ["Guards are E11-06 and E11-07."]
+    },
+    {
+      "id": "E11-04",
+      "title": "Implement lastprice, decimals and resolution reads",
+      "labels": ["backend"],
+      "requirements": ["FR-19"],
+      "dependsOn": ["E11-03"],
+      "scope": "The three calls the valuation needs. decimals and resolution are properties of the feed rather than per-asset, so they can be read once and cached — but confirm that against the deployed contract rather than assuming it.",
+      "files": [
+        "lumens-vault/backend/src/adapters/reflector/reads.ts (new)",
+        "lumens-vault/backend/test/adapters/reflector/reads.test.ts (new)"
+      ],
+      "acceptance": [
+        "lastprice returns price and timestamp for a given asset, decoded to bigint and a unix seconds number",
+        "decimals and resolution are read and their caching lifetime stated with reasoning",
+        "An asset the oracle does not cover returns null rather than zero or a thrown error — a missing price and a zero price must never be conflated",
+        "Verified against the live testnet oracle for at least one real asset; paste the raw and decoded values",
+        "The raw integer, the decimals, and the resulting human-readable price are all shown in the PR so the scaling is checkable"
+      ],
+      "nonGoals": ["No multi-asset batching yet."]
+    },
+    {
+      "id": "E11-05",
+      "title": "Map whitelisted assets onto oracle asset identifiers",
+      "labels": ["backend"],
+      "requirements": ["FR-19", "FR-11"],
+      "dependsOn": ["E11-04", "E09-07"],
+      "scope": "The vault's whitelist holds Soroban contract addresses. The oracle may identify assets by symbol or by a different address. Nothing guarantees a one-to-one mapping, and an asset the oracle does not cover must be handled rather than crashing valuation.",
+      "files": [
+        "lumens-vault/backend/src/adapters/reflector/asset-mapping.ts (new)",
+        "lumens-vault/backend/test/adapters/reflector/asset-mapping.test.ts (new)"
+      ],
+      "acceptance": [
+        "A resolver maps a vault asset address to the oracle's identifier, driven by configuration rather than hardcoded",
+        "An unmapped asset yields a clear unavailable result, not an exception and not a guess",
+        "The mapping for the seeded testnet asset is verified end to end by fetching its real price",
+        "How an operator adds a new asset mapping when the admin whitelists something new is documented — this is a manual step and must not be invisible"
+      ],
+      "nonGoals": ["No automatic asset discovery."]
+    },
+    {
+      "id": "E11-06",
+      "title": "Implement the staleness guard",
+      "labels": ["backend", "security"],
+      "requirements": ["FR-19"],
+      "dependsOn": ["E11-04"],
+      "scope": "An oracle can stop updating while still returning its last value. Displaying a days-old price as current is worse than displaying nothing, because the user has no way to tell. Every real Reflector integration treats this as mandatory.",
+      "files": [
+        "lumens-vault/backend/src/domain/valuation.ts (new)",
+        "lumens-vault/backend/test/domain/staleness.test.ts (new)"
+      ],
+      "acceptance": [
+        "A price older than a configurable threshold is marked stale rather than returned as fresh",
+        "The default threshold is derived from the feed's own resolution rather than picked arbitrarily, and the derivation is stated",
+        "Clock skew between this backend and the oracle is considered; a price timestamped slightly in the future is not treated as an error",
+        "Tests cover fresh, exactly at the threshold, stale, and future-timestamped",
+        "The function is pure and lives in domain/, importing no adapter"
+      ],
+      "nonGoals": ["No automatic fallback source."]
+    },
+    {
+      "id": "E11-07",
+      "title": "Implement the deviation guard",
+      "labels": ["backend", "security"],
+      "requirements": ["FR-19"],
+      "dependsOn": ["E11-06"],
+      "scope": "A price that jumps implausibly between reads may be a genuine market move or a broken feed, and the backend cannot distinguish them. Flagging rather than silently displaying is the correct behaviour when the difference matters.",
+      "files": [
+        "lumens-vault/backend/src/domain/valuation.ts (edit)",
+        "lumens-vault/backend/test/domain/deviation.test.ts (new)"
+      ],
+      "acceptance": [
+        "A price deviating beyond a configurable percentage from the last cached reading is marked deviant",
+        "The default threshold is stated with reasoning, acknowledging that crypto assets legitimately move sharply and a tight threshold produces noise",
+        "The first reading for an asset has nothing to compare against and is not marked deviant; a test covers this",
+        "A deviant reading is still cached, so the next comparison is against reality rather than a frozen baseline — state this behaviour explicitly, it is the subtle part",
+        "Tests cover within threshold, beyond it, first reading, and recovery to normal"
+      ],
+      "nonGoals": ["No multi-oracle cross-checking; FR-19 specifies Reflector alone."]
+    },
+    {
+      "id": "E11-08",
+      "title": "Define the unavailable state and its precedence",
+      "labels": ["backend"],
+      "requirements": ["FR-19", "NFR-4"],
+      "dependsOn": ["E11-06", "E11-07"],
+      "scope": "Four statuses exist and several can apply at once — a stale price can also be deviant, and an unmapped asset is unavailable regardless. Define the precedence so the UI receives one unambiguous status.",
+      "files": [
+        "lumens-vault/backend/src/domain/valuation.ts (edit)",
+        "lumens-vault/backend/test/domain/price-status.test.ts (new)"
+      ],
+      "acceptance": [
+        "Precedence among unavailable, deviant, stale and fresh is defined and justified",
+        "Unavailable covers: asset not mapped, oracle unreachable, and oracle returning no price — and the reason is carried alongside the status so the UI can explain which",
+        "A test covers every combination including simultaneously stale and deviant",
+        "The rule that no status ever implies a usable number when one is not trustworthy is stated in a comment"
+      ],
+      "nonGoals": ["No TWAP fallback; if one is wanted later it is a separate decision."]
+    },
+    {
+      "id": "E11-09",
+      "title": "Handle per-asset decimals explicitly in valuation",
+      "labels": ["backend"],
+      "requirements": ["FR-19"],
+      "dependsOn": ["E11-05", "E11-08"],
+      "scope": "Vault balances are i128 scaled by the token's decimals; oracle prices are integers scaled by the feed's decimals. Multiplying them requires both scales, and assuming either — particularly assuming XLM's seven — produces valuations wrong by orders of magnitude.",
+      "files": [
+        "lumens-vault/backend/src/domain/valuation.ts (edit)",
+        "lumens-vault/backend/test/domain/decimals.test.ts (new)"
+      ],
+      "acceptance": [
+        "Token decimals are read per asset from the token contract, not assumed and not shared across assets",
+        "The valuation arithmetic is bigint throughout until a final display conversion, and the conversion point is explicit",
+        "A worked example appears in a comment showing raw balance, token decimals, raw price, oracle decimals and the resulting USD figure",
+        "Tests cover assets with differing decimals — at minimum seven and six — and assert exact expected values",
+        "A test asserts that a large balance does not lose precision through the calculation"
+      ],
+      "nonGoals": ["No currency other than USD."]
+    },
+    {
+      "id": "E11-10",
+      "title": "Compute total portfolio value for a user",
+      "labels": ["backend"],
+      "requirements": ["FR-19", "FR-22"],
+      "dependsOn": ["E11-09"],
+      "scope": "The dashboard shows one USD total across a user's vaults. When some assets have trustworthy prices and others do not, the total must communicate that rather than silently omitting the unpriced portion.",
+      "files": [
+        "lumens-vault/backend/src/domain/valuation.ts (edit)",
+        "lumens-vault/backend/test/domain/portfolio.test.ts (new)"
+      ],
+      "acceptance": [
+        "Sums valued vaults and reports which assets could not be valued, rather than dropping them from the total silently",
+        "The result carries the worst status among its inputs, so a total containing one stale price is not presented as fresh",
+        "A user with no vaults returns zero with a fresh status, not an error",
+        "A user whose assets are entirely unpriced returns an unavailable total rather than zero — zero and unknown are different and must not be conflated",
+        "Tests cover all-fresh, mixed, and all-unavailable"
+      ],
+      "nonGoals": ["No historical valuation."]
+    },
+    {
+      "id": "E11-11",
+      "title": "Assemble the price oracle adapter behind its port",
+      "labels": ["backend"],
+      "requirements": ["FR-19"],
+      "dependsOn": ["E11-05", "E11-08"],
+      "scope": "Compose the client, reads, mapping and guards into one class implementing IPriceOracle.",
+      "files": [
+        "lumens-vault/backend/src/adapters/reflector/index.ts (new)",
+        "lumens-vault/backend/test/adapters/reflector/index.test.ts (new)"
+      ],
+      "acceptance": [
+        "Implements getLastPrice per the port contract, returning null where the port specifies null",
+        "The guards are applied in the domain layer, not here — the adapter returns readings, the domain judges them; state how this separation is maintained",
+        "An integration test with a stubbed oracle covers a successful read, an unknown asset, and an unreachable oracle",
+        "No remaining stubs; typecheck proves the port is fully implemented"
+      ],
+      "nonGoals": ["No second oracle implementation."]
+    },
+    {
+      "id": "E11-12",
+      "title": "Add scheduled price refresh with caching",
+      "labels": ["backend"],
+      "requirements": ["FR-19", "NFR-4"],
+      "dependsOn": ["E11-11", "E07-14"],
+      "scope": "Fetching a price per API request would hammer the oracle and make page loads slow. Refresh on a schedule into the cache and serve from it, which also gives the deviation guard its comparison baseline.",
+      "files": [
+        "lumens-vault/backend/src/valuation/refresh.ts (new)",
+        "lumens-vault/backend/test/valuation/refresh.test.ts (new)"
+      ],
+      "acceptance": [
+        "Prices for all whitelisted assets refresh on a configurable interval, with the default related to the feed's resolution",
+        "Each result is cached with its status and fetch time",
+        "An oracle failure leaves the previous cached reading in place but transitions its status, so the UI shows a stale price rather than nothing — state this behaviour and why it is preferable",
+        "Refresh failures do not stop the scheduler",
+        "Only assets currently whitelisted are refreshed, so a delisted asset stops costing calls"
+      ],
+      "nonGoals": ["No per-request fetching."]
+    },
+    {
+      "id": "E11-13",
+      "title": "Verify valuation against live oracle data",
+      "labels": ["backend", "testing"],
+      "requirements": ["FR-19"],
+      "dependsOn": ["E11-12", "E06-07"],
+      "scope": "Stubbed tests prove the arithmetic is internally consistent. Only a live read proves the decimals, the asset mapping and the scaling are right, and a wrong scale is entirely plausible while every unit test passes.",
+      "files": ["lumens-vault/docs/reflector.md (edit)"],
+      "acceptance": [
+        "A real price is fetched from the testnet oracle for the seeded asset and the full chain recorded: raw price, decimals, resolution, timestamp, computed value",
+        "The computed USD value for a known vault balance is sanity-checked against an independent price source and the comparison stated — an order-of-magnitude error is exactly what this catches",
+        "The staleness guard is observed against the real feed's update cadence and the chosen threshold confirmed reasonable",
+        "Any discrepancy is investigated rather than accepted"
+      ],
+      "nonGoals": ["Not continuous monitoring of oracle accuracy."]
+    },
+    {
+      "id": "E11-14",
+      "title": "Document the valuation model and its limits",
+      "labels": ["backend", "docs"],
+      "requirements": ["FR-19", "NFR-4", "NFR-7"],
+      "dependsOn": ["E11-13"],
+      "scope": "State plainly what the USD figures mean and what they do not, so nobody downstream treats a display value as a financial number.",
+      "files": ["lumens-vault/docs/valuation.md (new)"],
+      "acceptance": [
+        "Documents the source, the guards and their thresholds, and the four statuses with what each means for a user",
+        "States that valuation is display-only and nothing on-chain depends on price — the vault contract never calls the oracle",
+        "Records the verified oracle addresses and where they came from",
+        "States the known limitations: single oracle, no aggregation, and assets the feed does not cover",
+        "Explains what a user sees for each status, which is the contract with the frontend work in E16"
+      ],
+      "nonGoals": ["Not duplicating Reflector's documentation."]
+    },
+    {
+      "id": "E11-15",
+      "title": "Confirm no price data can reach the contract",
+      "labels": ["backend", "security"],
+      "requirements": ["FR-19", "NFR-1"],
+      "dependsOn": ["E11-11"],
+      "scope": "FR-19 is emphatic that valuation is off-chain only and the vault contract never calls an oracle. That is currently true because no such code exists, and the value of checking is to keep it true as the codebase grows.",
+      "files": ["lumens-vault/docs/valuation.md (edit)"],
+      "acceptance": [
+        "Confirm the contract has no oracle dependency: no oracle address in storage, no cross-contract call beyond the SAC token interface; state how this was verified",
+        "Confirm no backend code path feeds a price into a contract invocation",
+        "Document why this boundary matters — an oracle dependency in a vault's withdrawal path turns an oracle outage into frozen funds",
+        "Note that adding any price dependency to the contract would be a significant design change requiring its own decision, not an incremental feature"
+      ],
+      "nonGoals": ["No automated enforcement beyond the architecture test."]
+    },
+    {
+      "id": "E11-16",
+      "title": "Handle oracle unavailability gracefully end to end",
+      "labels": ["backend", "testing"],
+      "requirements": ["FR-19", "NFR-4"],
+      "dependsOn": ["E11-12", "E11-10"],
+      "scope": "The oracle will be unreachable sometimes. NFR-4 makes that tolerable — a missing price is a display gap, not a fund-safety problem — but only if it degrades cleanly rather than failing the whole dashboard.",
+      "files": ["lumens-vault/backend/test/valuation/degradation.test.ts (new)"],
+      "acceptance": [
+        "With the oracle unreachable, vault balances and lists still return normally; only valuation is affected",
+        "The API returns an unavailable status with a reason rather than an error response",
+        "A test simulates oracle failure during a portfolio calculation and asserts partial results with correct statuses",
+        "Recovery is tested: after the oracle returns, the next refresh restores fresh status without a restart",
+        "No unhandled rejection or crash in any failure path"
+      ],
+      "nonGoals": ["No alerting on oracle downtime beyond the existing sink."]
+    }
+  ]
+}

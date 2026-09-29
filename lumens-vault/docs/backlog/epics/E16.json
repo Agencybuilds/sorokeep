@@ -1,0 +1,247 @@
+{
+  "epic": "E16",
+  "title": "Frontend: Operations & Polish",
+  "milestone": "LV5 - Frontend & Release",
+  "issues": [
+    {
+      "id": "E16-01",
+      "title": "Implement the operations page layout",
+      "labels": ["frontend"],
+      "requirements": ["FR-23", "FR-24"],
+      "dependsOn": ["E13-12", "E14-12"],
+      "scope": "The structural shell of the page that makes this project a real Sorokeep showcase. FR-23 is explicit that it shows genuine data, so every section here must be wired to a real source rather than placeholder content.",
+      "files": [
+        "lumens-vault/frontend/app/operations/page.tsx (edit)",
+        "lumens-vault/frontend/components/operations/Layout.tsx (new)"
+      ],
+      "acceptance": [
+        "Layout matches the approved E13-06 wireframe with sections for TTL health, guard activity, alerts and admin actions",
+        "The page is viewable without a wallet — it shows system state rather than user data",
+        "Loading and error states use the shared components",
+        "Responsive behaviour follows E13-11; the dense tables must not force horizontal page scroll",
+        "No section renders fabricated or sample data, even temporarily"
+      ],
+      "nonGoals": ["Individual sections are the following issues."]
+    },
+    {
+      "id": "E16-02",
+      "title": "Display TTL health per monitored entry",
+      "labels": ["frontend", "sorokeep-integration"],
+      "requirements": ["FR-23", "FR-15", "NFR-5"],
+      "dependsOn": ["E16-01", "E12-13"],
+      "scope": "The core of the showcase: current TTL for the instance entry, the WASM entry and, if E10-04 found it workable, individual vault entries. What this page can honestly show depends on that finding.",
+      "files": ["lumens-vault/frontend/components/operations/TtlHealth.tsx (new)"],
+      "acceptance": [
+        "Each monitored entry shows its remaining TTL in ledgers and approximate real time",
+        "Entries approaching their threshold are visually distinguished, without relying on colour alone",
+        "Instance and WASM entries are distinguished from individual vault entries",
+        "If per-entry vault tracking proved impractical in E10-04, the page states that plainly rather than implying coverage that does not exist — an honest gap is better than a misleading display",
+        "Sorokeep being unreachable renders a clear state rather than an empty table"
+      ],
+      "nonGoals": ["No TTL polling from the frontend; data comes from the backend."]
+    },
+    {
+      "id": "E16-03",
+      "title": "Display guard policy and auto-extension history",
+      "labels": ["frontend", "sorokeep-integration"],
+      "requirements": ["FR-23", "FR-15"],
+      "dependsOn": ["E16-02"],
+      "scope": "Show that auto-extension is configured and actually happening. A guard that is configured but has never fired looks identical to one that is broken unless the history is visible.",
+      "files": ["lumens-vault/frontend/components/operations/GuardStatus.tsx (new)"],
+      "acceptance": [
+        "The active guard policy is shown, including thresholds and whether auto-extension is enabled",
+        "Recent extensions are listed with entry, ledger, and cost in XLM",
+        "Cumulative extension cost is shown, since that is the number that makes the ongoing commitment concrete",
+        "A guard configured but never triggered shows that state explicitly rather than an empty list",
+        "No secret or key material is displayed anywhere, only the public key if relevant"
+      ],
+      "nonGoals": ["No guard configuration from the UI."]
+    },
+    {
+      "id": "E16-04",
+      "title": "Display the Sorokeep alert timeline",
+      "labels": ["frontend", "sorokeep-integration"],
+      "requirements": ["FR-16", "FR-23"],
+      "dependsOn": ["E16-01", "E12-10"],
+      "scope": "Threshold crossings paired with their resolutions, so the page reads as a history of incidents rather than a list of disconnected events.",
+      "files": ["lumens-vault/frontend/components/operations/AlertTimeline.tsx (new)"],
+      "acceptance": [
+        "Alerts are listed newest first with entry, severity, threshold values and time",
+        "A crossing and its later resolution render as one resolved incident, not two rows",
+        "An unresolved crossing is visually distinct from a resolved one",
+        "Both the alert's own timestamp and when this backend received it are available, so a delivery delay is visible",
+        "An empty timeline states that no alerts have fired rather than appearing broken"
+      ],
+      "nonGoals": ["No alert acknowledgement."]
+    },
+    {
+      "id": "E16-05",
+      "title": "Display admin action history",
+      "labels": ["frontend"],
+      "requirements": ["FR-18", "FR-23"],
+      "dependsOn": ["E16-01", "E12-09"],
+      "scope": "The only place in the entire system where pause, upgrade, whitelist changes and admin transfers are visible. Sorokeep does not track application events, so if this page does not show them, nothing does.",
+      "files": ["lumens-vault/frontend/components/operations/AdminActivity.tsx (new)"],
+      "acceptance": [
+        "All seven action types render with actor, approximate time and their specific details",
+        "Upgrades are prominent and display the new wasm hash, so it can be compared against what was expected",
+        "Admin transfers show both the previous and new address",
+        "Config updates show the old and new lock bounds where both are known",
+        "Filtering by action type is available",
+        "An empty history states that no admin actions have occurred"
+      ],
+      "nonGoals": ["No admin controls; the API is read-only."]
+    },
+    {
+      "id": "E16-06",
+      "title": "Display ingestion status and data freshness",
+      "labels": ["frontend"],
+      "requirements": ["G-24", "NFR-4"],
+      "dependsOn": ["E16-01", "E12-11"],
+      "scope": "Every figure on this page comes from the cache. Without a freshness indicator a visitor cannot tell whether an empty alert timeline means all is well or that ingestion stopped two days ago.",
+      "files": ["lumens-vault/frontend/components/operations/DataFreshness.tsx (new)"],
+      "acceptance": [
+        "Current lag is shown in human terms alongside the last successful ingestion cycle",
+        "A detected history gap is surfaced prominently, stating which ledger range is missing",
+        "The healthy state is shown unobtrusively rather than omitted, so its absence is unambiguous",
+        "Displayed at the top of the page, since it qualifies everything below it",
+        "Backend unreachable is distinguished from backend reachable but lagging"
+      ],
+      "nonGoals": ["No historical lag chart."]
+    },
+    {
+      "id": "E16-07",
+      "title": "Display storage cost information",
+      "labels": ["frontend", "sorokeep-integration"],
+      "requirements": ["FR-23", "NFR-5"],
+      "dependsOn": ["E16-03", "E10-07"],
+      "scope": "Surface what keeping this contract's storage alive actually costs. It is the most honest part of the showcase — a vault product's viability depends on upkeep staying below what it holds.",
+      "files": ["lumens-vault/frontend/components/operations/StorageCosts.tsx (new)"],
+      "acceptance": [
+        "Cumulative extension cost to date is shown in XLM",
+        "Cost per entry and the current entry count are shown, so the relationship to scale is visible",
+        "A projection is included, clearly labelled as an estimate, based on the measurements in docs/storage-costs.md",
+        "The funding account's balance is shown if available, since the guard stops when it empties",
+        "Figures come from real measurements, never from hardcoded estimates"
+      ],
+      "nonGoals": ["No cost alerting from the frontend."]
+    },
+    {
+      "id": "E16-08",
+      "title": "Handle Sorokeep being unavailable on the operations page",
+      "labels": ["frontend", "sorokeep-integration"],
+      "requirements": ["FR-23", "NFR-4"],
+      "dependsOn": ["E16-02", "E16-03"],
+      "scope": "Depending on what E10-12 chose, live TTL data may come from a source that is not always reachable. Stored alerts remain available regardless, so the page should degrade to those rather than going blank.",
+      "files": ["lumens-vault/frontend/components/operations/Layout.tsx (edit)"],
+      "acceptance": [
+        "Sections depending on live Sorokeep data show an unavailable state while sections backed by stored data still render",
+        "The distinction is explained to the visitor rather than leaving them to infer it",
+        "The page never renders a partial figure that could be mistaken for a complete one",
+        "Verified by actually making the Sorokeep source unreachable and screenshotting the result"
+      ],
+      "nonGoals": ["No caching of live TTL data in the frontend."]
+    },
+    {
+      "id": "E16-09",
+      "title": "Add a contract information panel",
+      "labels": ["frontend"],
+      "requirements": ["FR-23", "NFR-7"],
+      "dependsOn": ["E16-01", "E12-08"],
+      "scope": "Show which contract this deployment is actually pointed at. A frontend configured against the wrong contract id currently produces an empty but working-looking app, and this panel makes that immediately obvious.",
+      "files": ["lumens-vault/frontend/components/operations/ContractInfo.tsx (new)"],
+      "acceptance": [
+        "Contract id, network, current admin and current lock bounds are displayed",
+        "The contract id links to a block explorer for the correct network",
+        "Paused state is shown with the ledger at which it changed",
+        "A mismatch between the frontend's configured contract and the backend's is surfaced as a prominent warning rather than silently preferring one",
+        "The running contract version from version() is shown if available, so an upgrade is visible here too"
+      ],
+      "nonGoals": ["No admin controls."]
+    },
+    {
+      "id": "E16-10",
+      "title": "Apply accessibility requirements to the operations page",
+      "labels": ["frontend"],
+      "requirements": ["FR-23"],
+      "dependsOn": ["E16-05", "E16-06", "E13-10"],
+      "scope": "This page is the densest in the product and leans heavily on status indication, which makes it the most likely to fail the E13-10 requirements.",
+      "files": ["lumens-vault/frontend/app/operations/ (edit)"],
+      "acceptance": [
+        "Every status — TTL health, alert severity, freshness — is distinguishable without colour",
+        "Tables have proper headers and are navigable by keyboard",
+        "Filter controls are labelled and operable by keyboard",
+        "An automated accessibility check is run against the route with results pasted; remaining issues are fixed or listed with reasons",
+        "Dynamically updating regions are announced appropriately rather than changing silently"
+      ],
+      "nonGoals": ["No full manual audit."]
+    },
+    {
+      "id": "E16-11",
+      "title": "Apply responsive layout to the operations page",
+      "labels": ["frontend"],
+      "requirements": ["FR-23"],
+      "dependsOn": ["E16-05", "E13-11"],
+      "scope": "Several dense tables that will not fit a narrow screen without the deliberate treatment E13-11 specified.",
+      "files": ["lumens-vault/frontend/app/operations/ (edit)"],
+      "acceptance": [
+        "The page is usable at the narrowest supported width with no horizontal page scroll",
+        "Tables use the specified narrow-screen treatment; columns E13-11 marked as never-hidden remain visible",
+        "The freshness indicator stays visible at every width, since it qualifies everything else",
+        "Verified at each specified breakpoint and the results listed"
+      ],
+      "nonGoals": ["No separate mobile page."]
+    },
+    {
+      "id": "E16-12",
+      "title": "Add component tests for the operations page",
+      "labels": ["frontend", "testing"],
+      "requirements": ["FR-23"],
+      "dependsOn": ["E16-02", "E16-04", "E16-05", "E16-06"],
+      "scope": "Cover the states most likely to appear at the wrong moment: unavailable sources, empty data, and degraded freshness.",
+      "files": ["lumens-vault/frontend/test/operations/ (new)"],
+      "acceptance": [
+        "Each section is tested in populated, empty, loading and error states",
+        "Alert correlation is tested: a crossing with a resolution renders as one resolved incident",
+        "The unavailable-Sorokeep state is tested, asserting stored data still renders",
+        "The gap-detected state is tested",
+        "Tests use stubbed API responses; no network required"
+      ],
+      "nonGoals": ["No browser end-to-end tests; those are E17."]
+    },
+    {
+      "id": "E16-13",
+      "title": "Verify the operations page shows genuinely real data",
+      "labels": ["frontend", "testing", "sorokeep-integration"],
+      "requirements": ["FR-23", "FR-15", "FR-16"],
+      "dependsOn": ["E16-07", "E16-08", "E16-09"],
+      "scope": "FR-23 states this is a genuine showcase page, not a mockup. That claim needs verification against the live system, because a page that renders plausible-looking data from stubs is exactly what this requirement exists to prevent.",
+      "files": ["lumens-vault/docs/ttl-findings.md (edit)"],
+      "acceptance": [
+        "The page is loaded against the live backend and the deployed testnet contract; capture a screenshot",
+        "Every displayed figure is traced to its real source and the trace recorded — TTL values reconciled against sorokeep status, admin actions against real transactions, alerts against real deliveries",
+        "At least one real alert is visible in the timeline, from an actual Sorokeep delivery rather than a test insert",
+        "Any section that cannot yet show real data is listed explicitly as a known gap rather than filled with something plausible",
+        "The screenshot and traces go into docs/ttl-findings.md as the evidence behind the showcase claim"
+      ],
+      "nonGoals": ["Not a public deployment."]
+    },
+    {
+      "id": "E16-14",
+      "title": "Final frontend polish and consistency pass",
+      "labels": ["frontend"],
+      "requirements": ["FR-21", "FR-22", "FR-23"],
+      "dependsOn": ["E15-24", "E16-13", "E16-10", "E16-11"],
+      "scope": "A pass across all four views for the inconsistencies that accumulate when pages are built by different people against the same design: divergent loading treatments, inconsistent number formatting, error messages in three voices.",
+      "files": ["lumens-vault/frontend/ (edit)"],
+      "acceptance": [
+        "Every view uses the shared loading, error and empty components rather than local variants",
+        "Amount formatting is identical across all views for the same value; verify by displaying one known balance in each place and comparing",
+        "Error messages are consistent in tone and all actionable, with no raw error strings reaching the user",
+        "Every route is checked against its approved wireframe and deviations are listed with reasons",
+        "`npm run build` produces a clean production build with zero TypeScript errors and no console warnings on any route"
+      ],
+      "nonGoals": ["No new features. No redesign — deviations go back to E13 rather than being decided here."]
+    }
+  ]
+}

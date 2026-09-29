@@ -1,0 +1,215 @@
+{
+  "epic": "E13",
+  "title": "Design: Wireframes & Design System",
+  "milestone": "LV4 - Design & Frontend Base",
+  "issues": [
+    {
+      "id": "E13-01",
+      "title": "Establish the design gate and what approval means",
+      "labels": ["design", "docs"],
+      "requirements": ["FR-24", "NFR-7"],
+      "dependsOn": ["E01-14"],
+      "scope": "FR-24 is a process requirement that has already been broken twice on this project — a Next.js scaffold and a set of mockups were both produced without sign-off. Restating it is not enough; define what approval concretely is, who gives it, and how a contributor can tell whether it has happened before picking up frontend work.",
+      "files": ["lumens-vault/docs/wireframes.md (new)"],
+      "acceptance": [
+        "States that no issue in E15 or E16 may start before this epic's approval issue is closed, and that each of those issues declares the dependency explicitly rather than relying on the reader knowing",
+        "Names who approves and records that approval is written, in the issue thread, not inferred from silence",
+        "Distinguishes wireframes, which are in scope here, from visual design, which is not — the gate is about agreeing structure and states before code, not about polish",
+        "Records the two prior breaches briefly, so the rule reads as a scar rather than bureaucracy",
+        "Linked from CONTRIBUTING so a contributor meets it before choosing an issue"
+      ],
+      "nonGoals": ["No designs in this issue."]
+    },
+    {
+      "id": "E13-02",
+      "title": "Inventory every screen state the product actually has",
+      "labels": ["design"],
+      "requirements": ["FR-21", "FR-22", "FR-23", "D-8"],
+      "dependsOn": ["E13-01"],
+      "scope": "Most design gaps on a product like this are unhappy states rather than layouts: a paused contract, a price that cannot be trusted, an archived vault entry, ingestion running behind. Enumerate them first so the wireframes cover reality rather than only the demo path.",
+      "files": ["lumens-vault/docs/wireframes.md (edit)"],
+      "acceptance": [
+        "Every view is listed with all its states: loading, empty, populated, error, and the domain-specific ones",
+        "Domain states are covered explicitly: contract paused, price stale, price deviant, price unavailable, vault locked, vault matured, vault fully withdrawn, vault with incomplete history, and a vault whose storage entry has archived",
+        "Wallet states are covered: not installed, not connected, connected on the wrong network, connected",
+        "Backend states are covered: reachable, unreachable, and reachable but significantly behind",
+        "Each state names the API field or condition that produces it, so design and implementation cannot diverge on what triggers what"
+      ],
+      "nonGoals": ["No layouts yet."]
+    },
+    {
+      "id": "E13-03",
+      "title": "Wireframe the dashboard",
+      "labels": ["design"],
+      "requirements": ["FR-19", "FR-22"],
+      "dependsOn": ["E13-02"],
+      "scope": "The landing view: total value, a summary of holdings, and the health of the system. It is where a price-status problem must be visible without the user hunting for it.",
+      "files": ["lumens-vault/docs/wireframes.md (edit)"],
+      "acceptance": [
+        "Layout covers the USD total, per-asset breakdown, and vault count",
+        "All four price statuses are designed, and a stale or deviant total is visually distinguishable from a fresh one without reading small print — a wrong-looking number presented confidently is the failure mode being designed against",
+        "The unavailable state shows no number at all rather than zero",
+        "Empty state for a user with no vaults is designed, including what it invites them to do",
+        "Disconnected-wallet state is designed"
+      ],
+      "nonGoals": ["No visual styling or colour choices."]
+    },
+    {
+      "id": "E13-04",
+      "title": "Wireframe the deposit flow",
+      "labels": ["design"],
+      "requirements": ["FR-21", "FR-2"],
+      "dependsOn": ["E13-02"],
+      "scope": "The most consequential flow in the product: a user is committing funds for a period they cannot shorten. The lock period is the part they are most likely to misunderstand, and FR-5 means there is no recovery from getting it wrong.",
+      "files": ["lumens-vault/docs/wireframes.md (edit)"],
+      "acceptance": [
+        "Asset selection is fed by the derived whitelist, and the design accounts for the list being empty or unavailable",
+        "The lock-period picker presents live bounds from the contract, and the design shows what happens when min equals max",
+        "Lock duration is shown in human terms — days, not ledgers — with the conversion stated; ledger counts are meaningless to a user",
+        "A confirmation step states plainly that funds cannot be withdrawn before the unlock date and that there is no early exit",
+        "Submitting, success and failure states are designed, including the wallet rejection case",
+        "The paused-contract state is designed: deposit unavailable with the reason given"
+      ],
+      "nonGoals": ["No copy writing beyond what conveys the structure."]
+    },
+    {
+      "id": "E13-05",
+      "title": "Wireframe the vaults list and detail",
+      "labels": ["design"],
+      "requirements": ["FR-22", "FR-3"],
+      "dependsOn": ["E13-02"],
+      "scope": "Where a user sees what they hold and withdraws it. Partial withdrawal is supported and is easy to design badly — the user needs to understand that the remainder stays locked under the original terms.",
+      "files": ["lumens-vault/docs/wireframes.md (edit)"],
+      "acceptance": [
+        "The list shows each vault's asset, balance, lock state and unlock date, with locked and matured clearly distinguished",
+        "Time remaining is shown in human terms, derived from the ledger difference",
+        "Withdrawal supports both full and partial, and the partial case explicitly states that the remainder stays locked until the same original unlock date",
+        "A vault flagged with incomplete history shows that it cannot be trusted rather than showing a possibly-wrong balance",
+        "A fully withdrawn vault's treatment matches whatever E03-01 and E09-01 decided, and the design cites which",
+        "Empty, loading and error states are designed"
+      ],
+      "nonGoals": ["No transaction-building detail."]
+    },
+    {
+      "id": "E13-06",
+      "title": "Wireframe the operations page",
+      "labels": ["design"],
+      "requirements": ["FR-23", "FR-15", "FR-18"],
+      "dependsOn": ["E13-02"],
+      "scope": "The page that makes this a genuine Sorokeep showcase rather than a claim. It shows real TTL health, real guard activity and real admin actions — FR-23 is explicit that this is not a mockup.",
+      "files": ["lumens-vault/docs/wireframes.md (edit)"],
+      "acceptance": [
+        "TTL health per monitored entry is shown, distinguishing the instance and WASM entries from individual vault entries",
+        "The design handles whatever E10-04 found about per-entry tracking — if individual vault entries cannot be tracked, the page must say so honestly rather than implying coverage that does not exist",
+        "Guard policy and recent auto-extensions are shown, including cost",
+        "The alert timeline pairs threshold crossings with their resolutions",
+        "Admin action history is shown, with upgrades prominent and displaying the wasm hash",
+        "Ingestion lag is surfaced so a visitor can tell whether the page is current",
+        "A state is designed for Sorokeep being unreachable, showing stored alerts with a clear caveat"
+      ],
+      "nonGoals": ["No admin controls; this API is read-only."]
+    },
+    {
+      "id": "E13-07",
+      "title": "Design the archived-entry state and decide whether restore is in v1",
+      "labels": ["design"],
+      "requirements": ["D-8", "FR-15", "NFR-5"],
+      "dependsOn": ["E13-05", "E06-14"],
+      "scope": "If a vault's persistent entry archives, the owner cannot withdraw until it is restored, and the failure they encounter is opaque. Sorokeep's guard exists to prevent this, but the UI needs an answer for when prevention fails. Whether the app offers a restore flow or only an explanation is an open decision.",
+      "files": ["lumens-vault/docs/wireframes.md (edit)"],
+      "acceptance": [
+        "The archived state is designed, explaining in plain language why the vault is temporarily unreachable and that the funds are not lost",
+        "The decision on whether a restore flow ships in v1 is recorded with reasoning; if yes, it becomes its own issue rather than being folded into E15",
+        "If restore is out of scope, the design states what the user is told to do instead",
+        "How the frontend detects the archived state is specified — the backend cache will not know, so state the mechanism",
+        "Cross-references docs/archival-recovery.md"
+      ],
+      "nonGoals": ["No restore implementation in this epic."]
+    },
+    {
+      "id": "E13-08",
+      "title": "Design the wallet connection and network mismatch flows",
+      "labels": ["design"],
+      "requirements": ["FR-20"],
+      "dependsOn": ["E13-02"],
+      "scope": "Every action needs a connected wallet on the right network. A user on mainnet looking at a testnet contract sees an empty, working-looking app, which is the most confusing possible outcome.",
+      "files": ["lumens-vault/docs/wireframes.md (edit)"],
+      "acceptance": [
+        "Not-installed, not-connected, wrong-network and connected states are all designed",
+        "The wrong-network state blocks actions and states plainly which network is required — it must never present as an empty portfolio",
+        "Connection failure and user rejection are designed",
+        "What remains viewable without a wallet is decided and stated; read-only browsing is reasonable and should be deliberate",
+        "Account switching is handled"
+      ],
+      "nonGoals": ["No wallet-specific implementation detail."]
+    },
+    {
+      "id": "E13-09",
+      "title": "Specify the shared component inventory",
+      "labels": ["design", "frontend"],
+      "requirements": ["FR-21", "FR-22", "FR-23"],
+      "dependsOn": ["E13-03", "E13-04", "E13-05", "E13-06"],
+      "scope": "Derive the reusable pieces from the four wireframed views rather than inventing a component library up front. Amount display in particular appears everywhere and must be consistent, because it is where decimal handling errors become user-visible.",
+      "files": ["lumens-vault/docs/design-system.md (new)"],
+      "acceptance": [
+        "Components are listed with their states and required props, derived from the wireframes",
+        "An amount component is specified that takes a string amount and the asset's decimals, and never accepts a JavaScript number — state this as a rule",
+        "A price-status indicator is specified once and used everywhere a value is shown",
+        "A ledger-to-time component is specified, with the five-seconds-per-ledger assumption stated and the fact that it is approximate made visible to the user",
+        "Loading and error presentation is specified once rather than per view"
+      ],
+      "nonGoals": ["No implementation. No third-party component library chosen here."]
+    },
+    {
+      "id": "E13-10",
+      "title": "Specify accessibility requirements",
+      "labels": ["design", "frontend"],
+      "requirements": ["FR-21", "FR-22"],
+      "dependsOn": ["E13-09"],
+      "scope": "Accessibility appears nowhere in the project's requirements and is far cheaper to specify now than to retrofit. This app also relies heavily on status colour for price trustworthiness, which is exactly the pattern that fails colour-blind users.",
+      "files": ["lumens-vault/docs/design-system.md (edit)"],
+      "acceptance": [
+        "A conformance target is named",
+        "Price and lock status must be distinguishable without relying on colour alone — specify the text or icon that accompanies each",
+        "Keyboard navigation is required for the full deposit and withdraw flows",
+        "Form inputs require labels and programmatically associated error messages",
+        "Focus management after a transaction completes is specified, since the result must be announced rather than only appearing"
+      ],
+      "nonGoals": ["No audit tooling selection."]
+    },
+    {
+      "id": "E13-11",
+      "title": "Specify responsive behaviour",
+      "labels": ["design", "frontend"],
+      "requirements": ["FR-22", "FR-23"],
+      "dependsOn": ["E13-09"],
+      "scope": "The vaults list and the operations page are both tabular and both degrade badly on narrow screens if nobody decides how. Wallet browsers are commonly mobile, so this is not hypothetical.",
+      "files": ["lumens-vault/docs/design-system.md (edit)"],
+      "acceptance": [
+        "Breakpoints are stated",
+        "The vaults list's narrow-screen layout is specified — cards rather than a squeezed table, or horizontal scroll, decided explicitly",
+        "The operations page's dense data is addressed for narrow screens, including which columns may be hidden and which never may",
+        "The deposit flow is confirmed usable at the narrowest supported width",
+        "No horizontal page scroll at any supported width"
+      ],
+      "nonGoals": ["No native mobile app."]
+    },
+    {
+      "id": "E13-12",
+      "title": "Obtain written design approval and open the frontend gate",
+      "labels": ["design"],
+      "requirements": ["FR-24"],
+      "dependsOn": ["E13-03", "E13-04", "E13-05", "E13-06", "E13-07", "E13-08", "E13-09", "E13-10", "E13-11"],
+      "scope": "The gate FR-24 defines. Every E15 and E16 issue depends on this one closing, and it closes only on explicit written approval — not on the wireframes existing.",
+      "files": ["lumens-vault/docs/wireframes.md (edit)"],
+      "acceptance": [
+        "Every view and state from E13-02's inventory has a corresponding design; any deliberate omission is listed with its reason",
+        "The maintainer gives explicit written approval in the issue thread; silence, a thumbs-up on a different issue, or a verbal remark do not count",
+        "The approval is recorded in docs/wireframes.md with the date",
+        "The document states that changes after approval need a new issue rather than an edit in passing, so frontend work is not built against a moving target",
+        "E15 and E16 are confirmed unblocked"
+      ],
+      "nonGoals": ["No implementation."]
+    }
+  ]
+}

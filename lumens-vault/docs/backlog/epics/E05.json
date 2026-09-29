@@ -1,0 +1,389 @@
+{
+  "epic": "E05",
+  "title": "Contract: Test Coverage & Verification",
+  "milestone": "LV1 - Contract",
+  "issues": [
+    {
+      "id": "E05-01",
+      "title": "Reproduce the flaky upgrade test before fixing it",
+      "labels": ["contract", "testing", "bug"],
+      "requirements": ["G-8", "FR-14"],
+      "dependsOn": ["E01-14"],
+      "scope": "test_real_upgrade_and_state_migration failed once and then passed on rerun with no code change. The previous backlog prescribed pinning the ledger sequence, but that fix was never tied to a reproduction, and the likelier cause is elsewhere: contractimport! reads the fixture wasm at compile time, and this project has already hit a Windows os error 32 file-in-use failure building that fixture. A pin at sequence 1000 is currently in the file — not the 100_000 the old issue specified — so the existing state matches neither the diagnosis nor the prescription. Reproduce first.",
+      "files": ["lumens-vault/docs/adr/0008-upgrade-test-flake.md (new)"],
+      "acceptance": [
+        "Attempt reproduction deliberately: delete the fixture's target directory, run `cargo test` without rebuilding the fixture, and record what happens",
+        "Attempt reproduction with the ledger pin removed, across at least 20 runs, and record the pass rate",
+        "State which hypothesis the evidence supports — build ordering, ledger sequence, both, or neither — and say so plainly if it could not be reproduced at all",
+        "The ADR records the investigation and its conclusion, including a negative result if that is the outcome. A fix applied without a reproduction is explicitly called out as not acceptable here"
+      ],
+      "nonGoals": ["Do not apply a fix in this issue. E05-02 does that, informed by this."]
+    },
+    {
+      "id": "E05-02",
+      "title": "Fix the upgrade test flake at its established root cause",
+      "labels": ["contract", "testing", "bug"],
+      "requirements": ["G-8", "FR-14"],
+      "dependsOn": ["E05-01"],
+      "scope": "Apply the fix that E05-01's evidence actually supports, rather than the one the old backlog guessed at.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "The change addresses the cause identified in ADR 0008 and the PR says which",
+        "If the ledger pin is retained, its value is justified rather than arbitrary, and a comment explains what it protects against",
+        "If the pin is not the fix, it is removed and the comment explaining its absence replaces it",
+        "`cargo test` run at least 10 consecutive times with no code change between runs; the PR states the count and pastes at least the first and last",
+        "The fixture is rebuilt from clean before the final run, so the tested path is the one a fresh contributor hits"
+      ],
+      "nonGoals": ["No other test touched."]
+    },
+    {
+      "id": "E05-03",
+      "title": "Make the fixture build dependency explicit rather than tribal knowledge",
+      "labels": ["contract", "testing", "devops"],
+      "requirements": ["G-8", "FR-14"],
+      "dependsOn": ["E05-01"],
+      "scope": "cargo test silently fails or uses a stale binary if the v2 fixture has not been built, because contractimport! resolves its path at compile time. Today the only thing that communicates this is a comment in test.rs. A new contributor who runs cargo test first will hit a confusing error.",
+      "files": [
+        "lumens-vault/contracts/lumens-vault/build.rs (new, if chosen)",
+        "lumens-vault/scripts/test-contract.ps1 (new)",
+        "lumens-vault/README.md (edit)"
+      ],
+      "acceptance": [
+        "Pick one mechanism and justify it: a build script that fails with a clear message when the fixture wasm is absent, or a test script that builds the fixture then runs cargo test",
+        "Running the chosen entry point from a clean checkout with no fixture target/ directory produces either a working run or an error message that names the exact command to fix it",
+        "README's test section uses this entry point",
+        "Demonstrate it: delete the fixture target/, run it, paste the output"
+      ],
+      "nonGoals": ["Do not vendor the fixture wasm into the repo."]
+    },
+    {
+      "id": "E05-04",
+      "title": "Test the lock-period boundaries at both ends",
+      "labels": ["contract", "testing"],
+      "requirements": ["FR-2", "NFR-2"],
+      "dependsOn": ["E02-05", "E02-11"],
+      "scope": "The configured range is inclusive at both ends. Off-by-one at a boundary is the most likely defect in range validation and the easiest to miss, because a test using a mid-range value passes either way.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Deposit with lock_ledgers exactly equal to min_lock_ledgers succeeds",
+        "Deposit with lock_ledgers exactly equal to max_lock_ledgers succeeds",
+        "Deposit one below min fails with InvalidLockPeriod",
+        "Deposit one above max fails with InvalidLockPeriod",
+        "The resulting unlock_ledger is asserted for the two successful cases, not just the absence of an error"
+      ],
+      "nonGoals": ["Constructor and update_config validation are E05-05."]
+    },
+    {
+      "id": "E05-05",
+      "title": "Test constructor and update_config reject invalid bounds",
+      "labels": ["contract", "testing"],
+      "requirements": ["FR-2", "FR-13", "NFR-2"],
+      "dependsOn": ["E02-03", "E02-08"],
+      "scope": "Both entry points apply the same validation and both must reject the same inputs, or an admin can reach a state the constructor would have refused.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Registering with min == 0 fails",
+        "Registering with max < min fails",
+        "Registering with min == max succeeds — a single fixed lock period is a legitimate configuration",
+        "update_config rejects the same two invalid cases and the stored bounds are unchanged after each rejection",
+        "The assertion style matches whatever E02-03 chose for constructor failures, and the PR notes that the two entry points fail in the same way"
+      ],
+      "nonGoals": ["Authorization is E04-06."]
+    },
+    {
+      "id": "E05-06",
+      "title": "Test that pause blocks both deposit and withdraw",
+      "labels": ["contract", "testing"],
+      "requirements": ["FR-5", "FR-10", "NFR-2"],
+      "dependsOn": ["E02-11"],
+      "scope": "FR-5 is specific: pause halts new deposits and withdrawals, and never unlocks funds early. Both halves need pinning, and the second half is the one that matters for user trust.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Deposit while paused fails with Error::Paused",
+        "Withdraw of a matured vault while paused fails with Error::Paused",
+        "After unpause, both succeed",
+        "A test asserts pause does not change any vault's unlock_ledger — pausing must never be a backdoor to early access, and must never lock funds permanently either"
+      ],
+      "nonGoals": ["Authorization is E04-03."]
+    },
+    {
+      "id": "E05-07",
+      "title": "Test the remaining error variants each have a triggering test",
+      "labels": ["contract", "testing"],
+      "requirements": ["NFR-2"],
+      "dependsOn": ["E05-04", "E05-06", "E03-10"],
+      "scope": "NFR-2 requires every Error variant to be exercised by a test that actually triggers it. Several are covered by issues elsewhere in E03, E04 and E05; this issue closes whatever is left and proves the set is complete.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "AssetNotWhitelisted: deposit of a never-whitelisted asset fails with it",
+        "InsufficientBalance: withdraw of more than the vault holds fails with it, and the balance is unchanged afterwards",
+        "TimelockNotExpired: withdraw before unlock_ledger fails with it, including the exact boundary — withdrawing at sequence == unlock_ledger must succeed, one before must fail",
+        "VaultNotFound: get_vault and withdraw for a nonexistent vault id both fail with it",
+        "InvalidAmount: zero and negative on both deposit and withdraw",
+        "The PR contains a table mapping every Error variant to the test that triggers it, which is the NFR-2 evidence"
+      ],
+      "nonGoals": ["NotInitialized is handled by E04-09, which may remove it."]
+    },
+    {
+      "id": "E05-08",
+      "title": "Assert every event's topic count stays within the ceiling",
+      "labels": ["contract", "testing"],
+      "requirements": ["NFR-3"],
+      "dependsOn": ["E02-09"],
+      "scope": "NFR-3 treats 4 topics as a hard ceiling. The SDK's type system does not enforce it, so nothing currently prevents someone adding a fifth #[topic]. There is also an unresolved question the project flagged and never answered: whether a bare #[contractevent] prepends an implicit name topic, which would change every event's real count. This test settles both.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "A test triggers every event type and reads env.events().all()",
+        "The actual topic count of each event is asserted, and the PR prints the observed topics per event type so the implicit-name-topic question is answered with evidence",
+        "No event exceeds 4 topics",
+        "DepositEvent and WithdrawEvent are confirmed to carry vault_id and amount as data rather than topics, per NFR-3's high-cardinality rule",
+        "The finding is recorded in docs/contract-interface.md, since the backend's decoders depend on it"
+      ],
+      "nonGoals": ["Not changing any event's shape unless the count exceeds 4, in which case stop and open a separate issue."]
+    },
+    {
+      "id": "E05-09",
+      "title": "Assert event payload contents, not just that events fire",
+      "labels": ["contract", "testing"],
+      "requirements": ["NFR-3", "FR-17"],
+      "dependsOn": ["E05-08"],
+      "scope": "The backend reconstructs all user-facing state from these events, so a wrong field is a wrong dashboard with no other detection path. Asserting an event fired is not enough; the values have to be checked.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "DepositEvent carries the correct from, asset, vault_id and amount for a known deposit",
+        "WithdrawEvent carries the correct to, asset, vault_id and the amount withdrawn — not the remaining balance, which is the obvious way to get this wrong",
+        "A partial withdrawal's event amount is the withdrawn portion; assert this explicitly",
+        "Admin events carry the acting admin, and NewAdminEvent carries both old and new addresses"
+      ],
+      "nonGoals": ["Backend decoding is E08."]
+    },
+    {
+      "id": "E05-10",
+      "title": "Test deposit and withdraw at i128 amount extremes",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["FR-7", "NFR-1"],
+      "dependsOn": ["E02-11"],
+      "scope": "Balances are i128. The arithmetic in withdraw subtracts from a stored balance, and deposit stores a caller-supplied amount directly. Large values are cheap to test and the failure mode is a corrupted balance.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "A deposit of i128::MAX either succeeds with the exact stored amount or fails cleanly; assert which and state it in the PR",
+        "A second deposit that would overflow a summed balance is examined — note that each deposit creates a separate vault, so confirm whether balances are ever summed on-chain and say so",
+        "Withdrawing the full i128 balance leaves exactly zero, with no wraparound",
+        "The token mint used in the test is large enough that the token contract is not the limiting factor; if it is, say so rather than reporting a false pass"
+      ],
+      "nonGoals": ["No fuzzing."]
+    },
+    {
+      "id": "E05-11",
+      "title": "Test withdrawal at the exact unlock ledger boundary",
+      "labels": ["contract", "testing"],
+      "requirements": ["FR-2", "FR-3", "NFR-2"],
+      "dependsOn": ["E02-11"],
+      "scope": "The check is `sequence < unlock_ledger` returns TimelockNotExpired, so withdrawal at exactly unlock_ledger is allowed. That is a deliberate boundary choice and should be pinned, because flipping it to <= is a one-character change that no mid-range test would catch.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Withdrawal at sequence == unlock_ledger - 1 fails with TimelockNotExpired",
+        "Withdrawal at sequence == unlock_ledger succeeds",
+        "The test name states the boundary, and a comment records that inclusive-at-unlock is the intended semantics",
+        "The same boundary is reflected in docs/contract-interface.md so the frontend does not show a vault as locked when the contract would allow the withdrawal"
+      ],
+      "nonGoals": ["No change to the comparison."]
+    },
+    {
+      "id": "E05-12",
+      "title": "Organise the test module into labelled sections",
+      "labels": ["contract", "testing"],
+      "requirements": ["NFR-2"],
+      "dependsOn": ["E05-07", "E04-13"],
+      "scope": "test.rs will hold roughly forty tests once this milestone lands, added by many contributors across many PRs. Without structure, finding whether a case is already covered becomes guesswork and duplicates appear.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Tests are grouped into clearly commented sections: setup helpers, vault operations, lock periods, authorization, storage lifecycle, events, upgrade",
+        "No test is renamed or changed in behaviour — this is organisation only, and the PR confirms the test count is identical before and after",
+        "`cargo test` green with the same number of tests as before"
+      ],
+      "nonGoals": ["No splitting into multiple files unless the module exceeds what one file can carry readably; if it does, raise it rather than deciding unilaterally."]
+    },
+    {
+      "id": "E05-13",
+      "title": "Measure and record contract test coverage",
+      "labels": ["contract", "testing"],
+      "requirements": ["NFR-2", "NFR-1"],
+      "dependsOn": ["E05-07"],
+      "scope": "NFR-2 is stated in terms of error variants, which is a good floor but says nothing about branch coverage. Measure once so the gaps are visible and future claims about coverage are grounded.",
+      "files": ["lumens-vault/docs/test-coverage.md (new)"],
+      "acceptance": [
+        "A coverage tool is run against the contract crate; the tool and version are named and the command recorded",
+        "The report is summarised per source file with the real numbers",
+        "Every uncovered branch is listed with a one-line judgement: acceptable, or needs an issue — and if it needs one, the issue is opened",
+        "The doc states the date and the commit it describes"
+      ],
+      "nonGoals": ["No coverage gate in CI yet; establish the baseline first."]
+    },
+    {
+      "id": "E05-14",
+      "title": "Test that deposit transfers tokens before recording the vault",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["NFR-1", "FR-1"],
+      "dependsOn": ["E02-11"],
+      "scope": "deposit calls the token's transfer first and writes vault state after. If the transfer fails the whole transaction reverts, so no vault should exist. Assert that, because a vault recorded without the corresponding tokens actually arriving is the worst failure this contract could have.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "A deposit by a user with insufficient token balance fails",
+        "After that failure get_user_vault_count is unchanged and no vault entry exists",
+        "The vault contract's token balance is unchanged",
+        "A successful deposit in the same test confirms the setup is otherwise sound"
+      ],
+      "nonGoals": ["Not testing malicious token contracts; that trust boundary is documented in E04-11."]
+    },
+    {
+      "id": "E05-15",
+      "title": "Test that withdraw records state before transferring out",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["NFR-1", "FR-3"],
+      "dependsOn": ["E02-11"],
+      "scope": "The mirror of E05-14. withdraw writes the decremented balance before calling transfer, which is the correct ordering. Pin it so a future refactor that reorders them is caught.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "A successful withdrawal leaves the stored balance and the token balances mutually consistent",
+        "A withdrawal that fails the timelock check moves no tokens and changes no balance",
+        "A withdrawal that fails the insufficient-balance check moves no tokens and changes no balance",
+        "A comment records that state-before-transfer is deliberate ordering, not incidental"
+      ],
+      "nonGoals": ["No reordering of the implementation."]
+    },
+    {
+      "id": "E05-16",
+      "title": "Test a full deposit-to-empty lifecycle in one scenario",
+      "labels": ["contract", "testing"],
+      "requirements": ["FR-3", "FR-4", "NFR-2"],
+      "dependsOn": ["E03-02", "E03-10"],
+      "scope": "Unit tests cover each step in isolation. One end-to-end scenario through the contract catches interaction bugs the isolated tests cannot — for example a counter that is correct after one deposit and wrong after three.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "One user makes three deposits across two assets with different lock periods",
+        "Locks mature at different ledgers and each vault is withdrawn, some partially first",
+        "Balances and vault ids are asserted at every step, not only at the end",
+        "The final state matches what E03-02 decided for zero-balance vaults",
+        "Token balances reconcile exactly: what left the user equals what the vault holds, at every step"
+      ],
+      "nonGoals": ["Not a replacement for the unit tests."]
+    },
+    {
+      "id": "E05-17",
+      "title": "Test that the upgrade preserves vault balances across many entries",
+      "labels": ["contract", "testing"],
+      "requirements": ["FR-14", "NFR-1"],
+      "dependsOn": ["E05-02"],
+      "scope": "The existing upgrade test migrates a single vault. The real risk in an upgrade is a partial or inconsistent migration across many entries, which one entry cannot reveal.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Several vaults across multiple users and assets are created before the upgrade",
+        "After the upgrade every one is readable through the new binary with its exact pre-upgrade balance and unlock_ledger",
+        "UserVaultCount is intact for each user",
+        "The contract address is unchanged throughout, and version() confirms the bytecode actually swapped"
+      ],
+      "nonGoals": ["Not a live testnet upgrade; that is E06-12."]
+    },
+    {
+      "id": "E05-18",
+      "title": "Test that admin state survives an upgrade",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["FR-14", "FR-8", "NFR-1"],
+      "dependsOn": ["E05-17"],
+      "scope": "Vault balances are the obvious thing to check across an upgrade. Admin, pause state and config live in instance storage and are equally load-bearing — an upgrade that silently reset the admin would hand the contract to nobody, or to whoever the new binary's constructor names.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Admin address is identical before and after the upgrade",
+        "Pause state survives: pause, upgrade, and assert still paused",
+        "Whitelist entries survive",
+        "The PR notes explicitly whether the new binary's constructor runs on upgrade — it must not, and this test is the evidence"
+      ],
+      "nonGoals": ["Not testing a migration that deliberately changes admin."]
+    },
+    {
+      "id": "E05-19",
+      "title": "Document how to run the contract test suite from a clean checkout",
+      "labels": ["docs", "testing"],
+      "requirements": ["G-8"],
+      "dependsOn": ["E05-03"],
+      "scope": "The fixture build ordering, the toolchain version requirement and the wasm target are all things a new contributor will hit in their first ten minutes. Write the path that works.",
+      "files": ["lumens-vault/docs/testing.md (new)"],
+      "acceptance": [
+        "Documents the required toolchain: Rust 1.85 or later because soroban-sdk 28's dependency tree needs edition2024, and the wasm32v1-none target",
+        "Gives the exact PowerShell command sequence from clean checkout to green suite",
+        "Explains the fixture build ordering and what the failure looks like if it is skipped",
+        "Every command was actually run on a clean checkout and the output is in the PR",
+        "Linked from README and CONTRIBUTING"
+      ],
+      "nonGoals": ["Not documenting backend or frontend testing; those come with their own epics."]
+    },
+    {
+      "id": "E05-20",
+      "title": "Add the contract test count and coverage summary to CI output",
+      "labels": ["devops", "testing"],
+      "requirements": ["NFR-2", "G-15"],
+      "dependsOn": ["E01-11", "E05-13"],
+      "scope": "CI currently passes or fails. Surfacing the test count makes a silently-skipped or deleted test visible in review, which is the realistic way coverage regresses on a project with many contributors.",
+      "files": [".github/workflows/lumens-vault-contract.yml (edit)"],
+      "acceptance": [
+        "The workflow prints the test count in its summary",
+        "The job fails if the suite reports zero tests run, which would otherwise look like success",
+        "The run is green on the introducing PR and the count matches a local run"
+      ],
+      "nonGoals": ["No coverage threshold gate yet."]
+    },
+    {
+      "id": "E05-21",
+      "title": "Run the full suite repeatedly to check for remaining nondeterminism",
+      "labels": ["contract", "testing"],
+      "requirements": ["G-8", "NFR-1"],
+      "dependsOn": ["E05-12", "E05-16", "E05-17"],
+      "scope": "One test in this suite has already been observed to flake. With roughly forty tests, several of them ledger- and TTL-sensitive, a single green run is weak evidence. Check the whole suite the way the upgrade test should have been checked.",
+      "files": ["lumens-vault/docs/testing.md (edit)"],
+      "acceptance": [
+        "The full suite is run at least 25 consecutive times with no code change; the PR states the exact count and the pass rate",
+        "Any test that fails even once is reported with its output and gets its own issue — it is not retried until green",
+        "If all runs pass, that is recorded in docs/testing.md with the date and commit",
+        "Tests are also run single-threaded at least once to check for inter-test interference"
+      ],
+      "nonGoals": ["Not fixing a flake found here; open an issue for it so the investigation gets its own scope."]
+    },
+    {
+      "id": "E05-23",
+      "title": "Assert the contract takes no fee on any path",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["FR-6", "NFR-2"],
+      "dependsOn": ["E02-11"],
+      "scope": "FR-6 states there are no protocol fees in v1. That is currently true only because nobody wrote any, which is not the same as being enforced. A negative requirement with no test is exactly the kind of thing that erodes quietly — someone adds a small skim during a later feature and no test objects. Pin it now while it is trivially true.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "A test deposits a known amount and asserts the vault's recorded balance equals it exactly, with nothing withheld",
+        "A test withdraws the full balance and asserts the tokens received equal the amount deposited exactly",
+        "Token balances are reconciled across the whole round trip: what left the user's account equals what returned to it, and the vault contract holds zero afterwards",
+        "The test name states the invariant, and a comment records that FR-6 makes this a deliberate guarantee rather than an incidental property",
+        "The same reconciliation is asserted for a partial withdrawal, since a per-withdrawal fee would be easiest to hide there"
+      ],
+      "nonGoals": ["Not designing a fee mechanism for a future version."]
+    },
+    {
+      "id": "E05-22",
+      "title": "Freeze the contract interface and record the milestone baseline",
+      "labels": ["contract", "docs"],
+      "requirements": ["NFR-7", "FR-14"],
+      "dependsOn": ["E05-21", "E03-12", "E04-14"],
+      "scope": "Backend and frontend work builds against this interface, and the whole point of finishing the contract milestone first is that off-chain work is not chasing a moving target. Record the frozen state so any later change is a visible, deliberate decision.",
+      "files": [
+        "lumens-vault/docs/contract-interface.md (edit)",
+        "lumens-vault/docs/adr/0009-contract-interface-freeze.md (new)"
+      ],
+      "acceptance": [
+        "contract-interface.md matches the built wasm exactly: exported functions, argument types, error codes and event shapes",
+        "The wasm hash and byte size are recorded alongside the commit",
+        "The ADR states that changes after this point require an issue explaining the impact on backend and frontend consumers",
+        "`cargo test` and `stellar contract build` output both pasted as the baseline evidence"
+      ],
+      "nonGoals": ["Not preventing future change; making it deliberate."]
+    }
+  ]
+}

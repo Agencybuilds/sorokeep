@@ -1,0 +1,422 @@
+{
+  "epic": "E15",
+  "title": "Frontend: Core Flows",
+  "milestone": "LV5 - Frontend & Release",
+  "issues": [
+    {
+      "id": "E15-01",
+      "title": "Implement the dashboard layout",
+      "labels": ["frontend"],
+      "requirements": ["FR-22", "FR-24"],
+      "dependsOn": ["E13-12", "E14-12", "E14-13"],
+      "scope": "The landing view's structure per the approved wireframe. Structure and data wiring only; the valuation display and its states follow in E15-02 and E15-03.",
+      "files": [
+        "lumens-vault/frontend/app/page.tsx (edit)",
+        "lumens-vault/frontend/components/dashboard/Summary.tsx (new)"
+      ],
+      "acceptance": [
+        "Layout matches the approved E13-03 wireframe; note any deviation and why",
+        "Vault count and per-asset holdings render from the API client",
+        "Loading, empty and error states use the shared components rather than bespoke ones",
+        "Responsive behaviour follows E13-11 with no horizontal page scroll at the narrowest supported width",
+        "Renders correctly with no wallet connected, per the E13-08 design"
+      ],
+      "nonGoals": ["No USD total yet."]
+    },
+    {
+      "id": "E15-02",
+      "title": "Display the portfolio USD total",
+      "labels": ["frontend"],
+      "requirements": ["FR-19", "FR-22"],
+      "dependsOn": ["E15-01", "E14-10"],
+      "scope": "Show the total from the valuation endpoint, formatted through the shared amount utilities so no JavaScript number arithmetic touches a balance.",
+      "files": ["lumens-vault/frontend/components/dashboard/TotalValue.tsx (new)"],
+      "acceptance": [
+        "The total renders from the API, with per-asset breakdown available",
+        "Formatting goes through the shared utilities; no arithmetic on amounts happens in the component",
+        "Assets the backend could not value are listed rather than silently excluded from view",
+        "A zero total from a user with no vaults is visually distinct from an unavailable total",
+        "A test asserts a balance beyond Number.MAX_SAFE_INTEGER displays exactly"
+      ],
+      "nonGoals": ["Price status styling is E15-03."]
+    },
+    {
+      "id": "E15-03",
+      "title": "Surface price status on every displayed value",
+      "labels": ["frontend"],
+      "requirements": ["FR-19"],
+      "dependsOn": ["E15-02", "E13-09"],
+      "scope": "The guards in E11 exist so a user is never shown an untrustworthy number as if it were reliable. That only pays off if the status is visible at the point the number is read.",
+      "files": ["lumens-vault/frontend/components/PriceStatus.tsx (new)"],
+      "acceptance": [
+        "All four statuses render distinctly, per the E13-09 specification",
+        "Status is conveyed by text or icon as well as colour, per the E13-10 accessibility requirement — a colour-only signal fails the users most likely to be harmed by a wrong number",
+        "Stale shows how old the price is; deviant explains that the price moved unusually; unavailable shows no number at all",
+        "The component is used everywhere a valuation appears, including the vaults list, not only the dashboard",
+        "A test renders all four states and asserts the non-colour signal is present in each"
+      ],
+      "nonGoals": ["No price history chart."]
+    },
+    {
+      "id": "E15-04",
+      "title": "Show system health on the dashboard",
+      "labels": ["frontend"],
+      "requirements": ["NFR-4", "G-24"],
+      "dependsOn": ["E15-01", "E12-11"],
+      "scope": "NFR-4 accepts that this data can be stale. That is only acceptable if staleness is visible — otherwise a user reads an hours-old balance as current.",
+      "files": ["lumens-vault/frontend/components/dashboard/SystemHealth.tsx (new)"],
+      "acceptance": [
+        "Ingestion lag is shown when it exceeds the healthy threshold, in human terms rather than ledger counts",
+        "A detected history gap is surfaced prominently, since it means displayed balances may be wrong rather than merely old",
+        "A paused contract is shown, explaining that deposits and withdrawals are unavailable",
+        "When everything is healthy the indicator is unobtrusive rather than absent, so its absence is not ambiguous",
+        "Backend unreachable renders per the E13-02 inventory"
+      ],
+      "nonGoals": ["No detailed TTL data; that is the operations page."]
+    },
+    {
+      "id": "E15-05",
+      "title": "Build the asset selector for the deposit form",
+      "labels": ["frontend"],
+      "requirements": ["FR-21", "FR-11"],
+      "dependsOn": ["E13-12", "E14-04", "E12-07"],
+      "scope": "Assets come from the backend's derived whitelist, since the contract cannot enumerate it. Delisted assets must not be selectable but the user may still hold vaults in them.",
+      "files": ["lumens-vault/frontend/components/deposit/AssetSelector.tsx (new)"],
+      "acceptance": [
+        "Only currently whitelisted assets are selectable",
+        "Each asset's decimals come from the API and are carried through to the amount input, never assumed",
+        "An empty whitelist renders an explanatory state rather than an empty dropdown",
+        "The whitelist being unavailable disables the form with a reason instead of showing a broken control",
+        "A test asserts a delisted asset does not appear as selectable"
+      ],
+      "nonGoals": ["No asset icons or search."]
+    },
+    {
+      "id": "E15-06",
+      "title": "Build the deposit amount input",
+      "labels": ["frontend"],
+      "requirements": ["FR-21", "FR-7"],
+      "dependsOn": ["E15-05", "E14-10"],
+      "scope": "Accept a human-entered amount and convert it to the raw i128 the contract expects, using the selected asset's decimals. FR-7 requires strictly positive amounts, and catching that client-side avoids a wasted signature.",
+      "files": ["lumens-vault/frontend/components/deposit/AmountInput.tsx (new)"],
+      "acceptance": [
+        "Input is converted via the shared amount utilities; no parseFloat or Number anywhere in the path",
+        "Zero and negative amounts are rejected before submission with a clear message, matching FR-7",
+        "More decimal places than the asset supports is rejected rather than silently truncated — truncation would deposit less than the user typed",
+        "The user's wallet balance is shown and an amount exceeding it is flagged before signing",
+        "Tests cover valid input, zero, negative, excess decimals, and a value beyond Number.MAX_SAFE_INTEGER"
+      ],
+      "nonGoals": ["No fiat-denominated input."]
+    },
+    {
+      "id": "E15-07",
+      "title": "Build the lock-period picker reading live bounds",
+      "labels": ["frontend"],
+      "requirements": ["FR-21", "FR-2"],
+      "dependsOn": ["E15-05", "E14-11"],
+      "scope": "FR-21 requires the bounds to come from the contract rather than being hardcoded — the admin can change them and a stale hardcoded range produces deposits the contract rejects. Users pick durations in days; the contract takes ledgers.",
+      "files": ["lumens-vault/frontend/components/deposit/LockPicker.tsx (new)"],
+      "acceptance": [
+        "Bounds are read live via get_lock_bounds, not from a constant and not from a cached value that could be stale; state which path is used and why it is correct",
+        "The picker presents days, converting to ledgers for submission, and shows the resulting unlock date",
+        "Values outside the bounds cannot be selected, and the boundaries themselves are selectable since the contract's range is inclusive",
+        "The case where min equals max renders sensibly rather than as a broken range control",
+        "A test asserts the submitted ledger value round-trips to the displayed number of days"
+      ],
+      "nonGoals": ["No preset shortcuts unless the wireframe specifies them."]
+    },
+    {
+      "id": "E15-08",
+      "title": "Build the deposit confirmation step",
+      "labels": ["frontend"],
+      "requirements": ["FR-21", "FR-5"],
+      "dependsOn": ["E15-06", "E15-07"],
+      "scope": "The last point at which a user can avoid locking funds they will not be able to reach. FR-5 means there is no emergency withdrawal, so this screen has to be unambiguous about the commitment.",
+      "files": ["lumens-vault/frontend/components/deposit/Confirm.tsx (new)"],
+      "acceptance": [
+        "Shows asset, exact amount, lock duration and the resulting unlock date",
+        "States plainly that funds cannot be withdrawn before that date and that there is no early exit or emergency unlock",
+        "The unlock date is marked approximate, since it derives from an estimated ledger close rate",
+        "Confirmation requires a deliberate action rather than being the default focus",
+        "Going back preserves the entered values instead of clearing the form"
+      ],
+      "nonGoals": ["No transaction submission; that is E15-09."]
+    },
+    {
+      "id": "E15-09",
+      "title": "Wire deposit submission through the wallet",
+      "labels": ["frontend"],
+      "requirements": ["FR-21", "FR-20"],
+      "dependsOn": ["E15-08", "E14-08"],
+      "scope": "Build, simulate, sign and submit the deposit invocation, then report the outcome honestly — including the case where confirmation times out and the result is genuinely unknown.",
+      "files": ["lumens-vault/frontend/app/deposit/page.tsx (edit)"],
+      "acceptance": [
+        "The transaction is simulated before the user is asked to sign, so a deposit that will fail is caught first",
+        "A simulation failure maps to a readable message via E14-09 — InvalidLockPeriod, AssetNotWhitelisted and Paused are all reachable here",
+        "Success shows the created vault id and links to the vaults list",
+        "Confirmation timeout reports the outcome as unknown with the transaction hash, never as failed",
+        "User rejection returns to the form with values preserved",
+        "The form is disabled while a submission is in flight, so a double click cannot create two vaults"
+      ],
+      "nonGoals": ["No transaction history view here."]
+    },
+    {
+      "id": "E15-10",
+      "title": "Handle the paused-contract state in the deposit flow",
+      "labels": ["frontend"],
+      "requirements": ["FR-10", "FR-21"],
+      "dependsOn": ["E15-09", "E12-08"],
+      "scope": "A paused contract rejects every deposit. Letting a user complete the whole form and then fail at signing wastes their time and looks like a bug.",
+      "files": ["lumens-vault/frontend/app/deposit/page.tsx (edit)"],
+      "acceptance": [
+        "The paused state is detected before the form is presented and deposits are disabled with the reason shown",
+        "The state is re-checked immediately before submission, since it can change while the form is open",
+        "A pause occurring between form load and submission produces a clear message rather than a raw contract error",
+        "Whether the paused indicator comes from the cache or a live read is stated, along with why that choice is safe here"
+      ],
+      "nonGoals": ["No notification when the contract unpauses."]
+    },
+    {
+      "id": "E15-11",
+      "title": "Implement the vaults list",
+      "labels": ["frontend"],
+      "requirements": ["FR-22"],
+      "dependsOn": ["E13-12", "E14-12", "E12-03"],
+      "scope": "The list of a user's vaults with balance, asset and lock state. The primary view for anyone who has already deposited.",
+      "files": [
+        "lumens-vault/frontend/app/vaults/page.tsx (edit)",
+        "lumens-vault/frontend/components/vaults/VaultList.tsx (new)"
+      ],
+      "acceptance": [
+        "Each vault shows asset, balance, lock state and unlock date, matching the approved wireframe",
+        "Locked and matured vaults are clearly distinguished without relying on colour alone",
+        "Amounts render through the shared utilities with the asset's own decimals",
+        "Empty, loading and error states use the shared components",
+        "Responsive layout follows E13-11 rather than a squeezed table"
+      ],
+      "nonGoals": ["Withdrawal is E15-14."]
+    },
+    {
+      "id": "E15-12",
+      "title": "Show lock countdown and maturity",
+      "labels": ["frontend"],
+      "requirements": ["FR-22", "FR-2"],
+      "dependsOn": ["E15-11", "E14-11"],
+      "scope": "Time remaining is the thing a user checks most often. It derives from a ledger difference and an estimated close rate, so it is approximate — and presenting an estimate as a precise countdown invites complaints when it drifts.",
+      "files": ["lumens-vault/frontend/components/vaults/LockStatus.tsx (new)"],
+      "acceptance": [
+        "Remaining time is shown in human terms, derived from the current ledger reported by the API rather than the browser clock",
+        "The approximation is visible; the UI must not imply a precise unlock timestamp",
+        "A matured vault is clearly labelled as withdrawable",
+        "A vault matured but blocked by a paused contract shows that distinction rather than appearing available",
+        "Tests cover far-future, near, exactly matured, and long-past unlock ledgers"
+      ],
+      "nonGoals": ["No live per-second ticking; the underlying data is not that precise."]
+    },
+    {
+      "id": "E15-13",
+      "title": "Implement the vault detail view",
+      "labels": ["frontend"],
+      "requirements": ["FR-22", "FR-3"],
+      "dependsOn": ["E15-11", "E12-04"],
+      "scope": "One vault with its deposit and withdrawal history, so a user can reconcile the current balance against what they did.",
+      "files": ["lumens-vault/frontend/components/vaults/VaultDetail.tsx (new)"],
+      "acceptance": [
+        "Shows current balance, unlock date and full event history oldest first",
+        "Each history entry shows the amount moved, not the running balance — a partial withdrawal must read as the amount taken out",
+        "A vault flagged with incomplete history displays that warning instead of presenting the balance as reliable",
+        "A nonexistent vault renders a clear not-found state rather than an error",
+        "Amounts throughout use the shared formatter"
+      ],
+      "nonGoals": ["No export."]
+    },
+    {
+      "id": "E15-14",
+      "title": "Implement the withdrawal flow",
+      "labels": ["frontend"],
+      "requirements": ["FR-3", "FR-22", "FR-20"],
+      "dependsOn": ["E15-13", "E14-08", "E12-05"],
+      "scope": "Withdraw from a matured vault. Eligibility must be confirmed live on-chain before signing — NFR-4 forbids deciding this from the cache, and a stale cache here means a failed transaction the user paid to submit.",
+      "files": ["lumens-vault/frontend/components/vaults/WithdrawForm.tsx (new)"],
+      "acceptance": [
+        "Eligibility is verified through the live endpoint from E12-05 immediately before submission, not from the cached list",
+        "The transaction is simulated before signing",
+        "TimelockNotExpired, InsufficientBalance and Paused all map to readable messages",
+        "Success updates the displayed balance and history without requiring a manual refresh",
+        "Confirmation timeout reports unknown with the transaction hash rather than failed",
+        "The form is disabled in flight so a double submission cannot occur"
+      ],
+      "nonGoals": ["Partial-withdrawal specifics are E15-15."]
+    },
+    {
+      "id": "E15-15",
+      "title": "Support partial withdrawal with clear remainder semantics",
+      "labels": ["frontend"],
+      "requirements": ["FR-3"],
+      "dependsOn": ["E15-14"],
+      "scope": "FR-3 allows withdrawing part of a vault, with the remainder staying locked under the original terms. Users will reasonably assume a partial withdrawal either unlocks the rest or restarts the lock, and both assumptions are wrong.",
+      "files": ["lumens-vault/frontend/components/vaults/WithdrawForm.tsx (edit)"],
+      "acceptance": [
+        "The user can withdraw less than the full balance, with a clear control for withdrawing everything",
+        "Before confirming, the UI states that the remainder stays locked until the same original unlock date — not a new one",
+        "After a partial withdrawal the vault shows the remainder with its unchanged unlock date",
+        "A full withdrawal's outcome matches what E03-01 decided on-chain and what E09-01 decided for the read model",
+        "An amount exceeding the balance is rejected before signing"
+      ],
+      "nonGoals": ["No scheduled or recurring withdrawals."]
+    },
+    {
+      "id": "E15-16",
+      "title": "Handle the archived-vault state in the UI",
+      "labels": ["frontend"],
+      "requirements": ["D-8", "NFR-5"],
+      "dependsOn": ["E15-14", "E13-07"],
+      "scope": "If a vault's storage entry archives, the withdrawal fails in a way that looks like the app is broken. Implement whatever E13-07 decided — either a restore path or an honest explanation.",
+      "files": ["lumens-vault/frontend/components/vaults/ArchivedState.tsx (new)"],
+      "acceptance": [
+        "The archived state is detected and distinguished from other failures; state the detection mechanism",
+        "The user is told in plain language that the funds are safe and the entry needs restoring, never that the vault is gone",
+        "Behaviour matches E13-07's decision on whether restore ships in v1",
+        "If restore is out of scope, the UI directs the user to the documented recovery path",
+        "A test covers the archived state rendering"
+      ],
+      "nonGoals": ["Do not implement restore unless E13-07 decided it is in v1."]
+    },
+    {
+      "id": "E15-17",
+      "title": "Add an activity view of all user events",
+      "labels": ["frontend"],
+      "requirements": ["FR-22", "FR-17"],
+      "dependsOn": ["E15-11", "E12-12"],
+      "scope": "A chronological view of everything the connected user has done across all their vaults, which is how people actually look for a past transaction.",
+      "files": ["lumens-vault/frontend/components/vaults/Activity.tsx (new)"],
+      "acceptance": [
+        "Deposits and withdrawals across all vaults, newest first, paginated",
+        "Each entry shows asset, amount, vault, and an approximate date from the ledger",
+        "Pagination does not skip or duplicate entries as new events arrive",
+        "Empty state for a user with no activity",
+        "Amounts use the shared formatter"
+      ],
+      "nonGoals": ["No filtering beyond pagination."]
+    },
+    {
+      "id": "E15-18",
+      "title": "Refresh data after a successful transaction",
+      "labels": ["frontend"],
+      "requirements": ["FR-22", "NFR-4"],
+      "dependsOn": ["E15-09", "E15-14"],
+      "scope": "After a deposit or withdrawal the backend has not ingested the event yet, so an immediate refetch returns the old state and the user concludes their transaction failed. This gap is inherent to the architecture and must be handled rather than ignored.",
+      "files": ["lumens-vault/frontend/lib/refresh.ts (new)"],
+      "acceptance": [
+        "After a confirmed transaction the UI reflects the change without a manual reload",
+        "The ingestion delay is handled explicitly: either poll until the backend catches up, or show the expected state marked as pending — state which and why",
+        "The user is never shown stale data that contradicts a transaction they just watched confirm",
+        "Polling gives up after a bounded time and says the update is taking longer than expected rather than spinning forever",
+        "A test simulates a lagging backend and asserts the chosen behaviour"
+      ],
+      "nonGoals": ["No websockets."]
+    },
+    {
+      "id": "E15-19",
+      "title": "Implement the read-only browsing experience",
+      "labels": ["frontend"],
+      "requirements": ["FR-20", "FR-22"],
+      "dependsOn": ["E15-01", "E15-11"],
+      "scope": "Per E13-08, decide and implement what a visitor without a wallet can see. Requiring a wallet before anything is visible is a poor first impression for a public showcase.",
+      "files": ["lumens-vault/frontend/app/page.tsx (edit)"],
+      "acceptance": [
+        "Behaviour matches E13-08's decision on what is viewable disconnected",
+        "Actions requiring a wallet prompt to connect at the point of use rather than blocking the whole page",
+        "No API call requiring an address is made while disconnected",
+        "Connecting from within a flow returns the user to where they were, not to the home page"
+      ],
+      "nonGoals": ["No public browsing of other users' vaults."]
+    },
+    {
+      "id": "E15-20",
+      "title": "Handle backend unavailability across every view",
+      "labels": ["frontend"],
+      "requirements": ["NFR-4"],
+      "dependsOn": ["E15-01", "E15-11", "E14-13"],
+      "scope": "NFR-4 bounds the consequence of the backend being down to a stale display. The app should behave accordingly rather than appearing broken, and crucially should still allow on-chain actions, which do not depend on the backend at all.",
+      "files": ["lumens-vault/frontend/lib/api/client.ts (edit)"],
+      "acceptance": [
+        "Every view degrades to a clear unreachable state instead of erroring or hanging",
+        "Actions that only need the wallet and the chain remain available when the backend is down; state which those are",
+        "Retry is offered where it could help, with backoff rather than immediate repeated calls",
+        "Verified by actually stopping the backend and exercising every route; list what remained usable",
+        "A 429 backs off rather than retrying immediately"
+      ],
+      "nonGoals": ["No offline mode."]
+    },
+    {
+      "id": "E15-21",
+      "title": "Apply the accessibility requirements to the core flows",
+      "labels": ["frontend"],
+      "requirements": ["FR-21", "FR-22"],
+      "dependsOn": ["E15-09", "E15-14", "E13-10"],
+      "scope": "Implement what E13-10 specified. Doing it now, while there are four views, is far cheaper than retrofitting later.",
+      "files": ["lumens-vault/frontend/app/ (edit)"],
+      "acceptance": [
+        "Deposit and withdrawal are completable using only the keyboard; state how this was tested",
+        "All form inputs have associated labels and their errors are programmatically linked",
+        "Price and lock status are distinguishable without colour",
+        "Transaction results are announced to assistive technology rather than only appearing visually",
+        "An automated accessibility check runs against each route with the results pasted; every remaining issue is either fixed or listed with a reason"
+      ],
+      "nonGoals": ["No full manual audit."]
+    },
+    {
+      "id": "E15-22",
+      "title": "Apply responsive layout to the core flows",
+      "labels": ["frontend"],
+      "requirements": ["FR-22"],
+      "dependsOn": ["E15-11", "E13-11"],
+      "scope": "Implement E13-11's specification. Wallet browsers are frequently mobile, so narrow-screen usability is a real requirement rather than a nicety.",
+      "files": ["lumens-vault/frontend/app/ (edit)"],
+      "acceptance": [
+        "Every route works at the narrowest supported width with no horizontal page scroll",
+        "The vaults list uses the specified narrow-screen layout rather than a compressed table",
+        "The deposit flow is completable on a narrow screen",
+        "Verified at the specified breakpoints and the results listed",
+        "Touch targets are large enough to use without precision"
+      ],
+      "nonGoals": ["No native app."]
+    },
+    {
+      "id": "E15-23",
+      "title": "Add component tests for the core flows",
+      "labels": ["frontend", "testing"],
+      "requirements": ["FR-21", "FR-22"],
+      "dependsOn": ["E15-09", "E15-14", "E15-15"],
+      "scope": "Cover the logic most likely to break silently: amount conversion, lock-period conversion, and the state machines behind the two transaction flows.",
+      "files": ["lumens-vault/frontend/test/flows/ (new)"],
+      "acceptance": [
+        "Deposit is tested across its states: form, confirm, signing, success, failure, rejection",
+        "Withdrawal is tested including the partial case and its remainder semantics",
+        "Amount and lock-period conversions are asserted against known expected values, not against the implementation's own output",
+        "Tests use a stubbed API client and a stubbed wallet; no network and no extension required",
+        "The suite runs in CI"
+      ],
+      "nonGoals": ["No browser end-to-end tests here; those are E17."]
+    },
+    {
+      "id": "E15-24",
+      "title": "Verify the core flows against the live testnet deployment",
+      "labels": ["frontend", "testing"],
+      "requirements": ["FR-21", "FR-22", "FR-3"],
+      "dependsOn": ["E15-18", "E15-20", "E15-23"],
+      "scope": "Component tests use stubs. Only a real run with a real wallet against the deployed contract proves the whole path — transaction building, network passphrase, decimals, and the ingestion delay all interact in ways stubs cannot reproduce.",
+      "files": ["lumens-vault/frontend/README.md (edit)"],
+      "acceptance": [
+        "A real deposit is completed through the UI with a real Freighter wallet; record the transaction hash and the created vault id",
+        "The new vault appears in the list once ingestion catches up; record how long that took, since it sets user expectations",
+        "A partial withdrawal and then a full withdrawal are completed, with hashes recorded",
+        "Displayed balances are reconciled against the contract's own get_vault at each step and the comparison pasted",
+        "At least one deliberate failure is exercised — a withdrawal before maturity — and the error message shown is recorded",
+        "Any discrepancy between displayed and on-chain values blocks this issue"
+      ],
+      "nonGoals": ["Not a public deployment of the frontend."]
+    }
+  ]
+}

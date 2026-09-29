@@ -1,0 +1,343 @@
+{
+  "epic": "E06",
+  "title": "Deployment, CI & Release Engineering",
+  "milestone": "LV2 - Deploy & Backend Core",
+  "issues": [
+    {
+      "id": "E06-01",
+      "title": "Write the network configuration reference for testnet and mainnet",
+      "labels": ["devops", "docs"],
+      "requirements": ["FR-9", "NFR-7"],
+      "dependsOn": ["E01-14"],
+      "scope": "Deploy tooling, the backend and the frontend all need RPC URLs and network passphrases, and nothing may hardcode them — the project is testnet-first but mainnet-ready by configuration. Establish the canonical values once so three components do not each invent their own.",
+      "files": ["lumens-vault/docs/networks.md (new)"],
+      "acceptance": [
+        "Testnet and mainnet RPC URLs and network passphrases are recorded, each taken from Stellar's official documentation with the link, not from memory or another project's config",
+        "Each URL is verified reachable with a real getHealth call and the response pasted",
+        "The doc states that no component may hardcode these; they come from configuration in every case",
+        "Notes that a public RPC endpoint's event retention is set by its operator and must be checked per provider, which E08-02 does"
+      ],
+      "nonGoals": ["Not choosing the production RPC provider."]
+    },
+    {
+      "id": "E06-02",
+      "title": "Write the testnet deploy script",
+      "labels": ["devops"],
+      "requirements": ["FR-9", "G-14", "D-6"],
+      "dependsOn": ["E02-15", "E06-01"],
+      "scope": "Deployment must pass admin, min_lock_ledgers and max_lock_ledgers as constructor arguments at deploy time. There is no separate initialize call and reintroducing one would restore the front-running vulnerability FR-9 closed.",
+      "files": ["lumens-vault/scripts/deploy.ps1 (new)"],
+      "acceptance": [
+        "Builds the contract, uploads the wasm and deploys with constructor arguments in one flow",
+        "Uses the flag spelling E02-15 verified against the live CLI, not the spelling any document asserts",
+        "Reads the deploying key from an environment variable by name; no secret appears in the script, in a default value, or in any echoed output",
+        "Refuses to run with a clear message if a required variable is unset, rather than deploying with an empty admin",
+        "Prints the deployed contract id and wasm hash at the end, since every downstream step needs them",
+        "PowerShell 7 syntax throughout"
+      ],
+      "nonGoals": ["No mainnet path in this script. E06-13 covers that separately and deliberately."]
+    },
+    {
+      "id": "E06-03",
+      "title": "Document the fresh-testnet deployment sequence end to end",
+      "labels": ["devops", "docs"],
+      "requirements": ["FR-9", "G-14"],
+      "dependsOn": ["E06-02"],
+      "scope": "Someone with a clean machine should be able to get from checkout to a deployed, working contract by following one document. Today that knowledge is spread across three handoff files and none of it has been executed.",
+      "files": ["lumens-vault/docs/deploy.md (edit)"],
+      "acceptance": [
+        "Covers prerequisites, funding a testnet account, building, deploying, and verifying the deployment responds to a view call",
+        "States the overflow-checks = true requirement under [profile.release] and what the build error looks like without it",
+        "Every command was actually run against testnet and the real output is in the PR, including the resulting contract id",
+        "A verification step at the end calls get_lock_bounds against the deployed contract and shows the constructor's values came through"
+      ],
+      "nonGoals": ["Sorokeep registration is E10-01."]
+    },
+    {
+      "id": "E06-04",
+      "title": "Document deploying when the admin is not the deployer",
+      "labels": ["devops", "docs", "security"],
+      "requirements": ["FR-8", "FR-9", "D-2"],
+      "dependsOn": ["E06-03", "E04-10"],
+      "scope": "The constructor calls admin.require_auth(), so when the intended admin is a separate account — which is the production case, a multisig — the deploy transaction must carry authorization from both the deployer and the admin. This is the step most likely to be discovered at the worst moment.",
+      "files": ["lumens-vault/docs/deploy.md (edit)"],
+      "acceptance": [
+        "Explains why a third-party admin must co-sign the deploy, referencing the require_auth() in the constructor",
+        "Gives the concrete procedure for building a transaction carrying both authorizations",
+        "The procedure was rehearsed on testnet with two distinct accounts and the output is in the PR — not described from the documentation alone",
+        "Cross-references docs/admin-setup.md for the medium-threshold requirement, since a multisig admin makes that live"
+      ],
+      "nonGoals": ["Not performing the production deployment."]
+    },
+    {
+      "id": "E06-05",
+      "title": "Deploy the contract to testnet and record the deployment",
+      "labels": ["devops"],
+      "requirements": ["G-14", "FR-9"],
+      "dependsOn": ["E06-03", "E05-22"],
+      "scope": "The gap the old backlog never closed: it wrote a deploy script and then assumed a deployed contract existed. Everything in E10 needs a real contract id. Deploy against the frozen interface from E05-22.",
+      "files": ["lumens-vault/docs/deployments.md (new)"],
+      "acceptance": [
+        "The contract is deployed to testnet using scripts/deploy.ps1",
+        "The record captures: contract id, wasm hash, deploying account, admin account, the lock bounds used, the commit deployed, the date, and the stellar-cli version",
+        "The wasm hash matches the one recorded in docs/contract-interface.md — if it does not, stop, because the deployed code is not the reviewed code",
+        "A deposit and a withdrawal are performed against the live contract and the transaction hashes recorded, proving it works and not merely that it deployed",
+        "No secret key appears anywhere in the record"
+      ],
+      "nonGoals": ["No mainnet deployment."]
+    },
+    {
+      "id": "E06-06",
+      "title": "Whitelist a test asset on the deployed contract",
+      "labels": ["devops"],
+      "requirements": ["FR-11", "FR-1"],
+      "dependsOn": ["E06-05"],
+      "scope": "A deployed vault with an empty whitelist accepts no deposits, so every downstream integration — backend ingestion, frontend deposit flow, Sorokeep entry discovery — needs at least one usable asset.",
+      "files": ["lumens-vault/docs/deployments.md (edit)"],
+      "acceptance": [
+        "At least one testnet asset is whitelisted via add_asset, with the transaction hash recorded",
+        "is_whitelisted confirms it against the live contract",
+        "The asset's contract id and decimals are recorded — decimals must not be assumed to match XLM's, and E11 depends on knowing them",
+        "How to obtain and mint that test asset is documented so a contributor can reproduce the setup"
+      ],
+      "nonGoals": ["Not choosing the production asset list."]
+    },
+    {
+      "id": "E06-07",
+      "title": "Seed representative vault data on the deployed contract",
+      "labels": ["devops", "testing"],
+      "requirements": ["FR-4", "FR-15"],
+      "dependsOn": ["E06-06"],
+      "scope": "Backend ingestion, the frontend's vault list and Sorokeep's per-entry monitoring all need real data to develop against. An empty contract makes every one of those indistinguishable from broken. Seeding many vaults is also what makes this a genuine showcase for storage lifecycle management rather than a toy.",
+      "files": ["lumens-vault/scripts/seed-testnet.ps1 (new)"],
+      "acceptance": [
+        "Creates vaults across at least three distinct user accounts, with varied assets and lock periods",
+        "Creates enough persistent entries that per-entry TTL monitoring is meaningful — state the count chosen and why",
+        "Is idempotent or clearly documented as not, so nobody doubles the data by rerunning it",
+        "The resulting contract state is recorded in docs/deployments.md",
+        "Keys come from environment variables; none is committed"
+      ],
+      "nonGoals": ["Not production data."]
+    },
+    {
+      "id": "E06-08",
+      "title": "Add a backend CI workflow",
+      "labels": ["devops", "backend"],
+      "requirements": ["G-15"],
+      "dependsOn": ["E07-02"],
+      "scope": "The backend needs the same PR-time protection as the contract. Path-filter it so it does not fire on contract or frontend changes.",
+      "files": [".github/workflows/lumens-vault-backend.yml (new)"],
+      "acceptance": [
+        "Triggers on changes under lumens-vault/backend/**",
+        "Runs install, typecheck, lint and the test suite; each failing step fails the job",
+        "Uses the Node version the backend's package.json declares — Sorokeep requires Node 22 or later and the backend depends on it",
+        "Green on the introducing PR; link the run"
+      ],
+      "nonGoals": ["No deployment from CI."]
+    },
+    {
+      "id": "E06-09",
+      "title": "Add a frontend CI workflow",
+      "labels": ["devops", "frontend"],
+      "requirements": ["G-15"],
+      "dependsOn": ["E14-02"],
+      "scope": "The frontend counterpart. A build failure caught in CI is cheaper than one caught by whoever pulls next.",
+      "files": [".github/workflows/lumens-vault-frontend.yml (new)"],
+      "acceptance": [
+        "Triggers on changes under lumens-vault/frontend/**",
+        "Runs install, typecheck, lint and production build",
+        "Fails on any TypeScript error rather than warning",
+        "Green on the introducing PR; link the run"
+      ],
+      "nonGoals": ["No preview deployments."]
+    },
+    {
+      "id": "E06-10",
+      "title": "Add a secret-scanning check to the lumens-vault workflows",
+      "labels": ["devops", "security"],
+      "requirements": ["NFR-1"],
+      "dependsOn": ["E01-11"],
+      "scope": "This project handles Stellar secret keys, a webhook signing secret and RPC credentials, and its rules say keys are referenced by environment variable name only. A mechanical check is worth more than a rule nobody re-reads. Note that the parent repo's test fixtures contain deliberate dummy Stellar keys, so a naive regex will produce false positives — scope the check to lumens-vault/ and allowlist known fixtures.",
+      "files": [".github/workflows/lumens-vault-secrets.yml (new)"],
+      "acceptance": [
+        "Scans only paths under lumens-vault/",
+        "Detects Stellar secret keys, which start with S and are 56 base32 characters",
+        "Runs green against the current tree — if it flags anything, either the finding is real and must be fixed, or the pattern needs narrowing; say which",
+        "Documented in CONTRIBUTING so a contributor knows why their PR failed"
+      ],
+      "nonGoals": ["No pre-commit hook. A prior attempt at one in the parent repo blocked commits against files already in the tree."]
+    },
+    {
+      "id": "E06-11",
+      "title": "Pin toolchain versions across CI and documentation",
+      "labels": ["devops"],
+      "requirements": ["G-15", "NFR-7"],
+      "dependsOn": ["E01-12", "E06-08"],
+      "scope": "Rust, stellar-cli and Node versions are currently stated in prose in three documents and implied in CI. When they drift, a contributor's local run and CI disagree and the failure is confusing rather than obvious.",
+      "files": [
+        "lumens-vault/contracts/lumens-vault/rust-toolchain.toml (new)",
+        "lumens-vault/docs/testing.md (edit)"
+      ],
+      "acceptance": [
+        "A rust-toolchain.toml pins the Rust version and declares the wasm32v1-none target so rustup provisions it automatically",
+        "CI uses the pinned versions rather than latest",
+        "The versions in docs match the pins exactly; list them in the PR",
+        "A clean checkout builds and tests with no manual toolchain steps beyond installing rustup — demonstrate this"
+      ],
+      "nonGoals": ["No Docker-based build environment."]
+    },
+    {
+      "id": "E06-12",
+      "title": "Rehearse the upgrade path on live testnet with two independent deployments",
+      "labels": ["devops", "security"],
+      "requirements": ["FR-14", "NFR-1"],
+      "dependsOn": ["E06-05"],
+      "scope": "FR-14 is proven by a unit test using a fixture binary. NFR-1 records that it has never been rehearsed on a live network, and the pre-mainnet checklist requires it. A live upgrade exercises things the test environment does not: real wasm upload, real fees, real authorization, and real archived-entry behaviour.",
+      "files": ["lumens-vault/docs/upgrade-runbook.md (new)"],
+      "acceptance": [
+        "A second, genuinely different build is uploaded to testnet and the deployed contract is upgraded to it",
+        "Vault balances written before the upgrade are read back correctly afterwards, with transaction hashes for every step",
+        "version() confirms the running bytecode changed",
+        "Admin, pause state and whitelist all survive — verified against the live contract, not assumed from the unit test",
+        "The runbook documents the exact sequence, the rollback position if the new binary is faulty, and states plainly whether rollback is possible at all",
+        "The contract is left in a known-good state, and which binary it is running is recorded in docs/deployments.md"
+      ],
+      "nonGoals": ["No mainnet upgrade."]
+    },
+    {
+      "id": "E06-13",
+      "title": "Write the mainnet deployment runbook as a separate, gated procedure",
+      "labels": ["devops", "docs", "security"],
+      "requirements": ["NFR-1", "FR-8"],
+      "dependsOn": ["E06-12", "E04-14"],
+      "scope": "Mainnet is deliberately not a flag on the testnet script. Making it a separate, explicitly gated procedure prevents an accidental mainnet deploy from a mistyped parameter, and forces the pre-mainnet checklist to be worked through rather than skipped.",
+      "files": ["lumens-vault/docs/mainnet-runbook.md (new)"],
+      "acceptance": [
+        "Opens with the pre-mainnet checklist from E04-14 as a hard gate, every item requiring a named sign-off",
+        "Requires the admin account's medium threshold to be verified and the verification output pasted before proceeding",
+        "States who is authorized to execute it and what is checked immediately after",
+        "Explicitly notes the contract has no emergency withdrawal, so a bug after funds arrive cannot be resolved by unlocking — the only lever is pause plus an upgrade",
+        "Marked clearly as not yet executed"
+      ],
+      "nonGoals": ["Not deploying to mainnet. Not deciding when that happens."]
+    },
+    {
+      "id": "E06-14",
+      "title": "Document how to recover an archived contract entry",
+      "labels": ["devops", "docs"],
+      "requirements": ["NFR-5", "FR-15"],
+      "dependsOn": ["E06-05"],
+      "scope": "If a persistent entry archives despite Sorokeep's guard, any transaction whose footprint includes it fails before executing until a RestoreFootprintOp runs. For this project that means a user whose vault archived cannot withdraw and will see a confusing failure. Someone needs to know what to do, in advance.",
+      "files": ["lumens-vault/docs/archival-recovery.md (new)"],
+      "acceptance": [
+        "Explains what archival means for a Vault entry and for UserVaultCount, and what the user-visible symptom is in each case",
+        "Gives the exact restore procedure with commands, including who pays",
+        "States the specific consequence of an archived UserVaultCount: every future deposit by that user fails, even though their existing vaults are fine",
+        "The procedure is rehearsed on testnet if an entry can be made to archive there; if that is impractical, say so plainly and cite the documentation the procedure is based on",
+        "Cross-referenced from the Operations page design in E13"
+      ],
+      "nonGoals": ["Not implementing automatic restore; Sorokeep's guard is the prevention mechanism."]
+    },
+    {
+      "id": "E06-15",
+      "title": "Add a make-style task entry point for common commands",
+      "labels": ["devops"],
+      "requirements": ["G-15"],
+      "dependsOn": ["E05-03", "E07-02"],
+      "scope": "Building the fixture, testing the contract, running the backend and starting the frontend are each multi-step and differ per component. A single documented entry point reduces the surface for a contributor to get it wrong.",
+      "files": ["lumens-vault/scripts/tasks.ps1 (new)"],
+      "acceptance": [
+        "Provides at minimum: build-contract, test-contract, deploy-testnet, backend-dev, backend-test, frontend-dev",
+        "Each task is a thin wrapper that prints the underlying command before running it, so contributors learn the real commands rather than depending on the wrapper",
+        "Fails clearly when a prerequisite is missing rather than producing a confusing downstream error",
+        "Documented in README"
+      ],
+      "nonGoals": ["Not introducing a monorepo task runner; SYSTEM_DESIGN rules that out."]
+    },
+    {
+      "id": "E06-16",
+      "title": "Add a dependency audit step to backend CI",
+      "labels": ["devops", "security", "backend"],
+      "requirements": ["NFR-1"],
+      "dependsOn": ["E06-08"],
+      "scope": "The backend pulls in the Stellar SDK, a SQLite driver, an HTTP framework and sorokeep itself. A known-vulnerable transitive dependency should fail a PR, not be discovered later.",
+      "files": [".github/workflows/lumens-vault-backend.yml (edit)"],
+      "acceptance": [
+        "Runs an audit of production dependencies at a stated severity threshold",
+        "The job fails at or above that threshold",
+        "The current baseline is recorded — if there are existing advisories, each is listed with a judgement rather than the threshold being quietly raised to make the build pass",
+        "Dev-only advisories are handled separately from production ones and the reasoning is stated"
+      ],
+      "nonGoals": ["No automated dependency updates."]
+    },
+    {
+      "id": "E06-17",
+      "title": "Record the deployed contract id where every component reads it",
+      "labels": ["devops", "docs"],
+      "requirements": ["G-16", "FR-17"],
+      "dependsOn": ["E06-05", "E07-03"],
+      "scope": "The backend, the frontend and Sorokeep all need the contract id. If each keeps its own copy they will disagree after a redeploy, and the symptom will be an empty dashboard rather than an error.",
+      "files": [
+        "lumens-vault/docs/deployments.md (edit)",
+        "lumens-vault/backend/.env.example (edit)",
+        "lumens-vault/frontend/.env.example (edit)"
+      ],
+      "acceptance": [
+        "deployments.md is the single written source of truth for the current testnet contract id",
+        "Both .env.example files carry the variable with a comment pointing at that document",
+        "Neither component has a hardcoded fallback contract id — a missing value must fail loudly at startup, which E07-03 enforces",
+        "The redeploy procedure lists every place that must be updated"
+      ],
+      "nonGoals": ["No service discovery mechanism."]
+    },
+    {
+      "id": "E06-18",
+      "title": "Add a wasm size regression check to contract CI",
+      "labels": ["devops"],
+      "requirements": ["G-15", "NFR-5"],
+      "dependsOn": ["E01-12", "E05-22"],
+      "scope": "Contract size affects deployment cost and the instance entry's rent. With a baseline now recorded at interface freeze, an unexpected jump is worth surfacing at review time rather than at deploy time.",
+      "files": [".github/workflows/lumens-vault-contract.yml (edit)"],
+      "acceptance": [
+        "The workflow compares the built wasm size against the baseline recorded in docs/contract-interface.md",
+        "A change beyond a stated percentage produces a visible warning in the job summary",
+        "The warning text notes that `///` doc comments on contract functions are embedded in the wasm spec metadata and therefore cost rent — measured during the E01 hygiene pass, where expanding one constructor doc comment grew the binary by 548 bytes and moving the same text to a `//` comment recovered all of it",
+        "It warns rather than fails — legitimate feature work grows the binary, and a hard gate would just get bypassed",
+        "The threshold chosen is stated with its reasoning"
+      ],
+      "nonGoals": ["No hard failure. No optimisation work."]
+    },
+    {
+      "id": "E06-19",
+      "title": "Document the redeploy and data-migration procedure",
+      "labels": ["devops", "docs"],
+      "requirements": ["FR-14", "G-14"],
+      "dependsOn": ["E06-12", "E06-17"],
+      "scope": "During development the testnet contract will be replaced rather than upgraded more than once. Each replacement invalidates the backend's ingested history, Sorokeep's registration and the frontend's configuration, and forgetting one produces a confusing partial failure.",
+      "files": ["lumens-vault/docs/redeploy.md (new)"],
+      "acceptance": [
+        "States clearly when to upgrade in place versus deploy fresh, and that a fresh deployment abandons all existing vault data",
+        "Lists every downstream update a fresh deployment requires: contract id in both .env files, Sorokeep re-registration, backend cursor and cache reset, seed data",
+        "Explains what happens if the backend is pointed at a new contract with a stale database, and how to reset it",
+        "Rehearsed once end to end and the output recorded"
+      ],
+      "nonGoals": ["Not automating redeploy."]
+    },
+    {
+      "id": "E06-20",
+      "title": "Verify CI does not fire on unrelated parent-repo changes",
+      "labels": ["devops"],
+      "requirements": ["G-15"],
+      "dependsOn": ["E06-08", "E06-09", "E06-10"],
+      "scope": "Lumens Vault lives inside the sorokeep repository until after Wave 9. Its workflows must not run on sorokeep's own pull requests, and sorokeep's must not run on Lumens Vault's — otherwise both projects get noisy, irrelevant CI failures.",
+      "files": [".github/workflows/ (verify only)"],
+      "acceptance": [
+        "Every lumens-vault workflow has a path filter scoped to lumens-vault/**",
+        "Verified in practice: a PR touching only a sorokeep file runs no lumens-vault workflow, and a PR touching only lumens-vault runs no sorokeep contract-irrelevant workflow. Link both runs",
+        "Any collision is reported rather than fixed by editing sorokeep's own workflows without agreement",
+        "The post-Wave-9 migration note records that these filters can be dropped once the project has its own repository"
+      ],
+      "nonGoals": ["Do not modify sorokeep's existing workflows."]
+    }
+  ]
+}

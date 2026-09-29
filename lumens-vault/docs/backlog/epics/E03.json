@@ -1,0 +1,198 @@
+{
+  "epic": "E03",
+  "title": "Contract: Storage Lifecycle & Correctness",
+  "milestone": "LV1 - Contract",
+  "issues": [
+    {
+      "id": "E03-01",
+      "title": "Decide what happens to a vault when its balance reaches zero",
+      "labels": ["contract", "docs"],
+      "requirements": ["G-11", "NFR-5"],
+      "dependsOn": ["E01-14"],
+      "scope": "withdraw decrements amount and writes the entry back. When the balance reaches zero the entry stays in persistent storage forever: still occupying a ledger entry, still accruing rent, still needing TTL extension by Sorokeep's guard. For a project whose stated purpose is showcasing storage lifecycle management, accumulating dead entries is the wrong default. Decide before implementing, because deleting has its own consequence — the vault id is consumed and a later get_vault returns VaultNotFound rather than a zero balance.",
+      "files": ["lumens-vault/docs/adr/0004-zero-balance-vaults.md (new)"],
+      "acceptance": [
+        "The ADR compares keeping the entry versus removing it, covering: rent cost, Sorokeep guard load, what get_vault returns afterwards, and whether the frontend can distinguish 'withdrawn' from 'never existed'",
+        "A decision is recorded with the date",
+        "If removal is chosen, the ADR states whether UserVaultCount is decremented — it must not be, or ids would be reused",
+        "The backend's view is considered: the event history still shows the vault existed, so the display layer is unaffected either way"
+      ],
+      "nonGoals": ["No code change in this issue."]
+    },
+    {
+      "id": "E03-02",
+      "title": "Implement the zero-balance vault decision in withdraw",
+      "labels": ["contract"],
+      "requirements": ["G-11", "NFR-5"],
+      "dependsOn": ["E03-01"],
+      "scope": "Apply whatever E03-01 decided. If removal: delete the persistent entry when the remaining balance hits zero, without touching UserVaultCount.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/contract.rs (edit)"],
+      "acceptance": [
+        "Behaviour matches the ADR exactly",
+        "If removing: `env.storage().persistent().remove(&vault_key)` is called only when the post-withdrawal balance is exactly zero",
+        "A test withdraws a full balance and asserts the decided outcome — either a VaultNotFound error or a zero-amount entry",
+        "A test withdraws a partial balance and asserts the entry survives with the correct remainder",
+        "UserVaultCount is unchanged by a full withdrawal, so the next deposit still gets a fresh id — assert this"
+      ],
+      "nonGoals": ["No change to deposit."]
+    },
+    {
+      "id": "E03-03",
+      "title": "Decide whether remove_asset should delete the whitelist key or keep writing false",
+      "labels": ["contract", "docs"],
+      "requirements": ["G-12", "FR-11"],
+      "dependsOn": ["E01-14"],
+      "scope": "remove_asset writes false rather than deleting the key, so every asset ever delisted permanently occupies space in instance storage. Instance storage is a single entry with a size limit, shared by admin, config, state and every whitelist key, so unbounded growth there eventually threatens the whole contract. Deleting is cheaper but loses the distinction between 'never whitelisted' and 'delisted' — check whether anything depends on that before changing it.",
+      "files": ["lumens-vault/docs/adr/0005-delisting-storage.md (new)"],
+      "acceptance": [
+        "The ADR establishes whether is_whitelisted's callers can distinguish the two states today, and whether anything needs to",
+        "It states the instance storage size limit for the current protocol version, with the source",
+        "A decision is recorded",
+        "It confirms that either way, withdrawal of an existing balance in a delisted asset must keep working — that is FR-11 and non-negotiable"
+      ],
+      "nonGoals": ["No code change here."]
+    },
+    {
+      "id": "E03-04",
+      "title": "Implement the delisting storage decision",
+      "labels": ["contract"],
+      "requirements": ["G-12", "FR-11"],
+      "dependsOn": ["E03-03"],
+      "scope": "Apply E03-03's decision to remove_asset.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/contract.rs (edit)"],
+      "acceptance": [
+        "Behaviour matches the ADR",
+        "is_whitelisted returns false for a delisted asset either way — assert it",
+        "DelistEvent is still emitted",
+        "A regression test proves an existing balance in a delisted asset is still withdrawable; this is the permanent guard on FR-11 and must be clearly named so nobody deletes it later"
+      ],
+      "nonGoals": ["No change to add_asset."]
+    },
+    {
+      "id": "E03-05",
+      "title": "Test that deposit extends the TTL of exactly the entries it touches",
+      "labels": ["contract", "testing"],
+      "requirements": ["NFR-5"],
+      "dependsOn": ["E01-14"],
+      "scope": "NFR-5 says contract functions extend TTL only for entries they touch, with Sorokeep's guard as the backstop for dormant ones. That property is asserted nowhere. A regression here is invisible until rent costs move or an entry archives unexpectedly.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "A test records the TTL of a second, untouched vault entry before and after a deposit to a different vault, and asserts it did not increase",
+        "The same test asserts the touched Vault entry and UserVaultCount did increase",
+        "Instance storage TTL is also asserted to increase, since deposit goes through check_paused and check_whitelisted which both extend it",
+        "TTLs are read with env.as_contract and get_ttl, following the pattern already used in test_user_vault_count_ttl_is_extended_on_deposit"
+      ],
+      "nonGoals": ["Not testing withdraw — that is E03-06."]
+    },
+    {
+      "id": "E03-06",
+      "title": "Test that withdraw extends the TTL of exactly the entries it touches",
+      "labels": ["contract", "testing"],
+      "requirements": ["NFR-5"],
+      "dependsOn": ["E01-14"],
+      "scope": "The withdraw counterpart to E03-05. withdraw extends the Vault entry it reads but deliberately does not touch UserVaultCount, and that asymmetry should be pinned down by a test rather than left as an accident of the implementation.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Asserts the withdrawn Vault entry's TTL increased",
+        "Asserts UserVaultCount's TTL did not increase, and a comment explains this is intentional — withdraw does not allocate an id",
+        "Asserts an unrelated vault's TTL is untouched"
+      ],
+      "nonGoals": ["Not changing withdraw's behaviour."]
+    },
+    {
+      "id": "E03-07",
+      "title": "Document the storage key layout and TTL policy",
+      "labels": ["contract", "docs"],
+      "requirements": ["NFR-5", "NFR-6", "FR-15"],
+      "dependsOn": ["E03-05", "E03-06"],
+      "scope": "Sorokeep's registration needs to know which keys exist and which are worth guarding, and the E10 storage-keys work depends on being able to enumerate them. Write down the layout once, authoritatively.",
+      "files": ["lumens-vault/docs/storage-layout.md (new)"],
+      "acceptance": [
+        "Every DataKey variant is listed with its storage class (instance or persistent), what it holds, and which functions touch it",
+        "The TTL constants are stated with their ledger and real-time equivalents at 5 seconds per ledger",
+        "Explains which entries Sorokeep's guard must cover because no contract call refreshes them — the dormant-vault case NFR-5 relies on",
+        "Explains why locks use unlock_ledger rather than TTL: TTL is permissionless and anyone can extend it, so it cannot gate a withdrawal"
+      ],
+      "nonGoals": ["Not the Sorokeep registration itself — that is E10."]
+    },
+    {
+      "id": "E03-08",
+      "title": "Test multiple vaults for one user across different assets",
+      "labels": ["contract", "testing"],
+      "requirements": ["FR-4", "G-23"],
+      "dependsOn": ["E02-11"],
+      "scope": "FR-4 allows a user to hold several vaults across several assets with independently incrementing ids, and every existing test uses exactly one vault. The id allocation is shared per user rather than per asset, which is the kind of thing that is easy to get backwards and currently unverified.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "A user deposits two different assets and the returned vault ids are 1 and 2 — proving the counter is per user, not per asset",
+        "get_vault returns the right balance for each (asset, id) pair",
+        "get_user_vault_count returns 2",
+        "Withdrawing from one vault leaves the other's balance untouched"
+      ],
+      "nonGoals": ["Not testing lock-period variation — that is E03-09."]
+    },
+    {
+      "id": "E03-09",
+      "title": "Test multiple vaults of the same asset with different lock periods",
+      "labels": ["contract", "testing"],
+      "requirements": ["FR-4", "FR-2", "G-23"],
+      "dependsOn": ["E02-11"],
+      "scope": "The case FR-4 calls out explicitly and nothing covers: the same asset locked twice for different durations. Each vault's unlock_ledger must be independent, so one maturing does not make the other withdrawable.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Two deposits of the same asset with different lock_ledgers produce two vaults with different unlock_ledger values",
+        "Advancing the ledger past only the shorter lock allows withdrawal from that vault and still rejects the other with TimelockNotExpired",
+        "Advancing past both allows withdrawal from each"
+      ],
+      "nonGoals": ["No partial-withdrawal assertions — that is E03-10."]
+    },
+    {
+      "id": "E03-10",
+      "title": "Test partial withdrawal leaves the remainder locked under the same terms",
+      "labels": ["contract", "testing"],
+      "requirements": ["FR-3", "G-22"],
+      "dependsOn": ["E02-11"],
+      "scope": "FR-3 supports partial withdrawal with the remainder staying locked under the original terms. Only one existing test touches this incidentally, and none asserts the crucial part: that unlock_ledger is unchanged by a partial withdrawal, so the remainder is not silently re-locked or unlocked.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Deposit, mature the lock, withdraw part of the balance, and assert the entry's amount is exactly the remainder",
+        "Assert unlock_ledger is identical before and after — this is the property FR-3 actually promises",
+        "A second partial withdrawal of the remainder succeeds and reaches zero",
+        "The zero-balance outcome matches whatever E03-02 implemented"
+      ],
+      "nonGoals": ["Not testing withdraw authorisation — that is E04."]
+    },
+    {
+      "id": "E03-11",
+      "title": "Test that a delisted asset's existing balance stays withdrawable",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["FR-11"],
+      "dependsOn": ["E03-04"],
+      "scope": "An earlier version of this contract had the whitelist check on withdraw as well as deposit, which would have permanently trapped user funds the moment an admin delisted an asset. The fix was to omit the check on withdraw. That omission looks like an oversight to anyone reading withdraw cold, so it needs a test whose name makes clear it is deliberate.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Deposit while whitelisted, delist the asset, mature the lock, and withdraw successfully",
+        "Assert a new deposit of the delisted asset fails with AssetNotWhitelisted in the same test, so both halves of FR-11 are pinned together",
+        "The test name states the invariant, e.g. test_delisting_blocks_deposits_but_never_traps_existing_funds",
+        "A comment points at FR-11 and notes this is a permanent regression guard"
+      ],
+      "nonGoals": ["Not changing remove_asset."]
+    },
+    {
+      "id": "E03-12",
+      "title": "Verify the contract still builds to wasm after the E02 and E03 changes",
+      "labels": ["contract", "devops"],
+      "requirements": ["NFR-1"],
+      "dependsOn": ["E03-02", "E03-04", "E02-11"],
+      "scope": "Native tests passing does not prove the contract still compiles for wasm32v1-none, the only target Soroban runs. Checkpoint the whole contract milestone against a real wasm build and record the resulting size, since the E02/E03 changes add code paths.",
+      "files": [],
+      "acceptance": [
+        "`stellar contract build` succeeds; paste the full output including wasm size and exported function list",
+        "The exported function list includes get_lock_bounds and matches docs/contract-interface.md from E02-16 — if it does not, that document is updated in this PR",
+        "The wasm size is compared against the 11,447-byte pre-change baseline and any large jump is explained",
+        "`cargo test` passes, run at least 3 times, with output"
+      ],
+      "nonGoals": ["No deployment. That is E06."]
+    }
+  ]
+}

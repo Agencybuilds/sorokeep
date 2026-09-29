@@ -1,0 +1,348 @@
+{
+  "epic": "E09",
+  "title": "Backend: State Reconstruction & Admin Actions",
+  "milestone": "LV2 - Deploy & Backend Core",
+  "issues": [
+    {
+      "id": "E09-01",
+      "title": "Define the vault state reduction model",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "NFR-4", "NFR-6"],
+      "dependsOn": ["E07-04"],
+      "scope": "The contract exposes no enumeration, so a user's vault list exists only as the result of folding their events in order. Decide the model before implementing it: what a deposit does, what a withdrawal does, what happens when events arrive out of order, and what a vault looks like once fully withdrawn.",
+      "files": ["lumens-vault/docs/adr/0011-vault-reduction.md (new)"],
+      "acceptance": [
+        "States the reduction as a pure function from an ordered event sequence to a set of VaultRecords",
+        "Defines deposit as creating a vault keyed by user, asset and vault id, and withdrawal as decrementing that vault's balance by the event's amount",
+        "States what the model does when a withdrawal references a vault no deposit created — this indicates missing history, and it must be surfaced rather than silently creating a negative balance",
+        "Records whether a fully withdrawn vault is retained in the read model, and reconciles that with whatever E03-01 decided on-chain; the two can legitimately differ and the reason must be stated",
+        "Confirms the function is pure and therefore belongs in domain/, importing no adapter"
+      ],
+      "nonGoals": ["No implementation."]
+    },
+    {
+      "id": "E09-02",
+      "title": "Implement deposit reduction",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "FR-4"],
+      "dependsOn": ["E09-01"],
+      "scope": "Apply a deposit event to the vault read model, creating the record. Vault ids increment per user across all assets, not per asset, so the model must not assume otherwise.",
+      "files": [
+        "lumens-vault/backend/src/domain/vault-state.ts (new)",
+        "lumens-vault/backend/test/domain/vault-state-deposit.test.ts (new)"
+      ],
+      "acceptance": [
+        "A deposit creates a VaultRecord with the correct user, asset, vault id, balance, created ledger and updated ledger",
+        "unlockLedger is populated — note that DepositEvent does not carry it, so state where the value comes from and how it is obtained; if it requires a contract read, that dependency is explicit",
+        "Two deposits of different assets by one user produce ids 1 and 2, matching the contract's per-user counter",
+        "A duplicate deposit event for an existing vault id is handled per the ADR, not by silently overwriting",
+        "The function is pure: same input, same output, no I/O"
+      ],
+      "nonGoals": ["Withdrawals are E09-03."]
+    },
+    {
+      "id": "E09-03",
+      "title": "Implement withdrawal reduction",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "FR-3"],
+      "dependsOn": ["E09-02"],
+      "scope": "Apply a withdrawal event, decrementing the balance. The event's amount is the amount withdrawn, not the remaining balance — treating it as the latter produces a plausible-looking but wrong balance, which is why E05-09 pins the contract side of this.",
+      "files": [
+        "lumens-vault/backend/src/domain/vault-state.ts (edit)",
+        "lumens-vault/backend/test/domain/vault-state-withdraw.test.ts (new)"
+      ],
+      "acceptance": [
+        "A withdrawal decrements the balance by the event amount and updates updatedLedger",
+        "A partial withdrawal leaves the remainder and does not change unlockLedger",
+        "Successive partial withdrawals reaching zero produce the outcome the ADR specified",
+        "A withdrawal exceeding the known balance does not produce a negative balance; it is clamped or rejected per the ADR and raises an alert, because it means history is missing",
+        "Arithmetic is bigint throughout; a test uses values beyond Number.MAX_SAFE_INTEGER"
+      ],
+      "nonGoals": ["Persistence is E09-05."]
+    },
+    {
+      "id": "E09-04",
+      "title": "Implement full-sequence reduction with ordering",
+      "labels": ["backend"],
+      "requirements": ["FR-17"],
+      "dependsOn": ["E09-03", "E08-17"],
+      "scope": "Fold an arbitrary event sequence into the complete vault set. This is the function that makes the cache rebuildable: replaying all events from scratch must reproduce the same state, which is what lets the database be deleted and regenerated.",
+      "files": [
+        "lumens-vault/backend/src/domain/vault-state.ts (edit)",
+        "lumens-vault/backend/test/domain/vault-state-reduce.test.ts (new)"
+      ],
+      "acceptance": [
+        "Reduces a mixed sequence of deposits and withdrawals across several users and assets to the correct final state",
+        "Applying events in ledger order is required; a test asserts that shuffling within a ledger does not change the outcome, or documents precisely why it can",
+        "Replaying the same sequence twice from empty produces identical output",
+        "A realistic sequence of at least fifty events across several users is covered, since defects here appear at volume rather than in two-event cases"
+      ],
+      "nonGoals": ["No incremental optimisation; correctness first."]
+    },
+    {
+      "id": "E09-05",
+      "title": "Wire reduction into the ingestion cycle",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "NFR-4"],
+      "dependsOn": ["E09-04", "E08-12"],
+      "scope": "Each ingestion cycle applies newly fetched events to the vault read model and persists the result, inside the same transaction that stores the events and advances the cursor.",
+      "files": [
+        "lumens-vault/backend/src/ingestion/apply-state.ts (new)",
+        "lumens-vault/backend/test/ingestion/apply-state.test.ts (new)"
+      ],
+      "acceptance": [
+        "New events update vault records within the existing ingestion transaction",
+        "A failure during reduction rolls back the events and the cursor too, so the three never diverge",
+        "Incremental application produces the same result as a full replay; a test asserts this against the same event set both ways",
+        "Only vaults actually touched by the batch are written"
+      ],
+      "nonGoals": ["No rebuild command; that is E09-06."]
+    },
+    {
+      "id": "E09-06",
+      "title": "Add a rebuild command that regenerates the read model from stored events",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "NFR-4"],
+      "dependsOn": ["E09-05"],
+      "scope": "NFR-4 permits this layer to be a rebuildable cache, which is only true if a rebuild actually exists. It is also the remedy when a reduction bug is fixed: correct the logic, replay, and the cache is right again without re-fetching from the network.",
+      "files": [
+        "lumens-vault/backend/src/ingestion/rebuild.ts (new)",
+        "lumens-vault/backend/test/ingestion/rebuild.test.ts (new)"
+      ],
+      "acceptance": [
+        "A command clears derived tables and replays all stored events to regenerate vaults, whitelist and admin actions",
+        "Stored raw events and the cursor are not deleted — the point is to rebuild derivations without refetching",
+        "A test ingests, corrupts a vault row directly, rebuilds, and asserts the corruption is gone",
+        "Progress is logged for large event sets so a long rebuild does not look like a hang",
+        "Documented in the backend README"
+      ],
+      "nonGoals": ["No re-fetch from RPC; that is cold start."]
+    },
+    {
+      "id": "E09-07",
+      "title": "Derive the current whitelist from whitelist and delist events",
+      "labels": ["backend"],
+      "requirements": ["FR-11", "FR-17"],
+      "dependsOn": ["E08-09", "E07-11"],
+      "scope": "The contract has only is_whitelisted for a specific asset and no way to list them, so the deposit form's asset dropdown cannot exist without deriving the set from events. Asset is in event data rather than a topic, so every such event must be decoded and inspected.",
+      "files": [
+        "lumens-vault/backend/src/domain/whitelist.ts (new)",
+        "lumens-vault/backend/test/domain/whitelist.test.ts (new)"
+      ],
+      "acceptance": [
+        "Folds whitelist and delist events into the current set, last write wins by ledger order",
+        "An asset added, removed and re-added ends whitelisted; assert the full sequence",
+        "Delisted assets are retained with isWhitelisted false so the UI can distinguish delisted from never-listed",
+        "A sample of the derived set is cross-checked against live is_whitelisted calls on the deployed contract, and the comparison pasted — this is the only real proof the derivation is right",
+        "Wired into the ingestion cycle"
+      ],
+      "nonGoals": ["No contract enumeration; NFR-6 rules it out."]
+    },
+    {
+      "id": "E09-08",
+      "title": "Detect and record admin actions",
+      "labels": ["backend"],
+      "requirements": ["FR-18"],
+      "dependsOn": ["E08-10", "E07-12"],
+      "scope": "Pause, unpause, whitelist, delist, admin transfer, upgrade and config update are the actions that change the rules users are operating under. Sorokeep monitors storage lifecycle and has no concept of them, so this backend is the only place they surface anywhere in the system.",
+      "files": [
+        "lumens-vault/backend/src/domain/admin-actions.ts (new)",
+        "lumens-vault/backend/test/domain/admin-actions.test.ts (new)"
+      ],
+      "acceptance": [
+        "All seven action types are detected from their events and stored with actor, ledger, timestamp and a typed payload",
+        "Storage is idempotent by event id, so replay does not duplicate",
+        "A test covers every action type; the mapping is exhaustive over the port's AdminActionType union so adding a type without handling it fails typecheck",
+        "Wired into the ingestion cycle"
+      ],
+      "nonGoals": ["Alerting is E09-09."]
+    },
+    {
+      "id": "E09-09",
+      "title": "Raise alerts for high-consequence admin actions",
+      "labels": ["backend", "security"],
+      "requirements": ["FR-18", "NFR-1"],
+      "dependsOn": ["E09-08", "E07-18"],
+      "scope": "Recording an upgrade for later display is not the same as noticing it happened. An unexpected upgrade or admin transfer is the strongest available signal that something is wrong, and it should not wait for someone to open the Operations page.",
+      "files": [
+        "lumens-vault/backend/src/domain/admin-alerting.ts (new)",
+        "lumens-vault/backend/test/domain/admin-alerting.test.ts (new)"
+      ],
+      "acceptance": [
+        "Upgrade and admin transfer raise critical alerts through IAlertSink; pause and unpause raise warnings; whitelist changes and config updates raise informational alerts",
+        "Severity assignment is justified in a comment rather than arbitrary",
+        "Alerts carry the event id so replay does not re-alert; a test proves an already-alerted event is not re-sent",
+        "The upgrade alert includes the new wasm hash, so an operator can compare it against what they intended to deploy",
+        "A test covers every action type's severity"
+      ],
+      "nonGoals": ["No external alert channel; the logging sink is sufficient for v1."]
+    },
+    {
+      "id": "E09-10",
+      "title": "Cross-check reconstructed balances against the contract",
+      "labels": ["backend", "testing"],
+      "requirements": ["FR-17", "NFR-4"],
+      "dependsOn": ["E09-05", "E06-07"],
+      "scope": "The read model is derived from events; the contract is the truth. They should agree, and if they do not, the reconstruction is wrong in a way no unit test will reveal. This check is the real validation of the whole ingestion path.",
+      "files": [
+        "lumens-vault/backend/src/verification/reconcile.ts (new)",
+        "lumens-vault/backend/test/verification/reconcile.test.ts (new)"
+      ],
+      "acceptance": [
+        "A routine samples reconstructed vaults and compares balance and unlock ledger against live get_vault calls",
+        "Discrepancies are reported per vault with both values, not summarised as a count",
+        "Run against the seeded testnet contract; paste the result, and if every vault matches say how many were checked",
+        "Any mismatch is investigated and explained in the PR — a passing reconciliation with an unexplained exclusion is not acceptable",
+        "Available as a command so it can be rerun after reduction changes"
+      ],
+      "nonGoals": ["Not run automatically every cycle; it costs RPC calls."]
+    },
+    {
+      "id": "E09-11",
+      "title": "Handle events for vaults with no known deposit",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "D-3"],
+      "dependsOn": ["E09-03", "E08-14"],
+      "scope": "If ingestion started after the contract had activity, or history was lost to a retention gap, a withdrawal can reference a vault whose deposit was never seen. Guessing a balance from it produces confidently wrong numbers.",
+      "files": [
+        "lumens-vault/backend/src/domain/orphan-events.ts (new)",
+        "lumens-vault/backend/test/domain/orphan-events.test.ts (new)"
+      ],
+      "acceptance": [
+        "An orphaned withdrawal is detected rather than applied blindly",
+        "The affected vault is marked as having incomplete history instead of being given an invented balance",
+        "An alert is raised through IAlertSink naming the vault",
+        "The read API exposes the incomplete flag so the UI can decline to show a balance it cannot trust",
+        "A test builds an event sequence starting mid-history and asserts the flag rather than a wrong number"
+      ],
+      "nonGoals": ["No attempt to recover the missing events."]
+    },
+    {
+      "id": "E09-12",
+      "title": "Populate unlockLedger for reconstructed vaults",
+      "labels": ["backend"],
+      "requirements": ["FR-17", "FR-2", "FR-22"],
+      "dependsOn": ["E09-02"],
+      "scope": "The vault list must show when each vault unlocks, but DepositEvent carries vault id and amount only — not unlock_ledger. The value has to come from somewhere, and each option has a real cost. Resolve this deliberately; it is a genuine gap between what the contract emits and what the UI needs.",
+      "files": [
+        "lumens-vault/docs/adr/0012-unlock-ledger-source.md (new)",
+        "lumens-vault/backend/src/domain/vault-state.ts (edit)"
+      ],
+      "acceptance": [
+        "The options are compared in the ADR: read get_vault per vault at ingestion time, derive from the deposit ledger plus the lock bounds in force then, or add unlock_ledger to DepositEvent in the contract",
+        "State that deriving it is unreliable because the depositor chooses lock_ledgers freely within the bounds and the event does not carry the choice",
+        "If adding a contract event field is chosen, a contract issue is opened and this one depends on it rather than guessing meanwhile",
+        "The chosen approach is implemented and a test asserts the reconstructed unlockLedger matches get_vault for a sample of seeded vaults",
+        "The per-vault RPC cost of the chosen approach at realistic vault counts is stated"
+      ],
+      "nonGoals": ["Do not display a guessed unlock time; NFR-4 permits staleness, not invention."]
+    },
+    {
+      "id": "E09-13",
+      "title": "Track the contract's paused state in the read model",
+      "labels": ["backend"],
+      "requirements": ["FR-10", "FR-18", "FR-22"],
+      "dependsOn": ["E09-08"],
+      "scope": "A paused contract rejects every deposit and withdrawal. The frontend needs to know so it can explain why an action is unavailable rather than letting a user sign a transaction that will fail.",
+      "files": [
+        "lumens-vault/backend/src/domain/contract-state.ts (new)",
+        "lumens-vault/backend/test/domain/contract-state.test.ts (new)"
+      ],
+      "acceptance": [
+        "Paused state is derived from pause and unpause events in ledger order",
+        "The ledger at which the current state took effect is recorded",
+        "Derived state is cross-checked against a live is_paused call and the comparison pasted",
+        "A comment notes that this is a cached view and the contract remains authoritative, consistent with NFR-4 — the UI should not use it to decide whether a withdrawal will succeed, only to explain likely outcomes"
+      ],
+      "nonGoals": ["No polling of is_paused on a timer."]
+    },
+    {
+      "id": "E09-14",
+      "title": "Track the current admin and lock bounds in the read model",
+      "labels": ["backend"],
+      "requirements": ["FR-12", "FR-13", "FR-21"],
+      "dependsOn": ["E09-08", "E02-09"],
+      "scope": "The Operations page shows who the admin is, and the deposit form needs the current lock bounds. Both change through admin events and both can be derived rather than polled.",
+      "files": [
+        "lumens-vault/backend/src/domain/contract-state.ts (edit)",
+        "lumens-vault/backend/test/domain/contract-config.test.ts (new)"
+      ],
+      "acceptance": [
+        "Current admin is derived from NewAdminEvent, falling back to the deploy-time admin recorded in configuration when no transfer has occurred",
+        "Current lock bounds are derived from ConfigUpdatedEvent, falling back to the deploy-time bounds",
+        "Both are cross-checked against live get_admin_address and get_lock_bounds calls",
+        "FR-21 requires the deposit picker to read live bounds; state explicitly whether the frontend should use this cached value or call the contract directly, and justify it — a stale bound here means a rejected deposit"
+      ],
+      "nonGoals": ["No frontend work."]
+    },
+    {
+      "id": "E09-15",
+      "title": "Add a domain test suite covering realistic event histories",
+      "labels": ["backend", "testing"],
+      "requirements": ["FR-17", "NFR-2"],
+      "dependsOn": ["E09-04", "E09-07", "E09-08"],
+      "scope": "The individual reducers are unit tested. Defects in this kind of code show up at the interaction of many events over time, not in isolated cases.",
+      "files": ["lumens-vault/backend/test/domain/scenarios.test.ts (new)"],
+      "acceptance": [
+        "A scenario runs several hundred events across at least ten users, several assets, and interleaved admin actions",
+        "Final balances are asserted against independently computed expectations, not against the implementation's own output",
+        "A scenario includes an asset delisted midway and asserts existing vaults remain intact and withdrawable in the model",
+        "A scenario includes an upgrade event and asserts vault state is unaffected",
+        "Each scenario is deterministic and reproducible"
+      ],
+      "nonGoals": ["No property-based testing."]
+    },
+    {
+      "id": "E09-16",
+      "title": "Measure reduction performance at realistic volume",
+      "labels": ["backend", "testing"],
+      "requirements": ["NFR-4"],
+      "dependsOn": ["E09-06"],
+      "scope": "A rebuild replays every stored event. If that takes minutes at a few thousand events, the rebuild remedy is not usable in practice and that should be known now rather than during an incident.",
+      "files": ["lumens-vault/docs/backend-performance.md (new)"],
+      "acceptance": [
+        "Rebuild is timed over at least ten thousand synthetic events and the duration recorded",
+        "Peak memory is noted, since reduction may hold the whole vault set",
+        "The measurement is compared against a realistic expectation for this project's scale and a judgement given: acceptable, or needs work",
+        "If work is needed, an issue is opened rather than optimising here",
+        "The measuring method is documented so the number can be reproduced"
+      ],
+      "nonGoals": ["No optimisation in this issue."]
+    },
+    {
+      "id": "E09-17",
+      "title": "Document the read model and its relationship to the contract",
+      "labels": ["backend", "docs"],
+      "requirements": ["FR-17", "NFR-4", "NFR-7"],
+      "dependsOn": ["E09-10", "E09-12"],
+      "scope": "Write down how derived state relates to on-chain truth, so a frontend contributor knows which values they may rely on and which they must verify live. This distinction is the whole of NFR-4 and is easy to lose sight of once the API looks authoritative.",
+      "files": ["lumens-vault/docs/read-model.md (new)"],
+      "acceptance": [
+        "Documents every derived entity, which events produce it, and what it is used for",
+        "States plainly that withdraw eligibility must always be checked on-chain and never decided from this model",
+        "Documents the incomplete-history flag and what a consumer should do with it",
+        "Records how unlockLedger is obtained, per E09-12's decision",
+        "Includes the reconciliation result from E09-10 as evidence the model is correct at a point in time"
+      ],
+      "nonGoals": ["Not the API reference; that is E12."]
+    },
+    {
+      "id": "E09-18",
+      "title": "Verify the full reconstruction against live testnet data",
+      "labels": ["backend", "testing"],
+      "requirements": ["FR-17", "FR-18"],
+      "dependsOn": ["E09-10", "E09-13", "E09-14"],
+      "scope": "The milestone checkpoint for the backend's core: run everything against the real deployed contract and confirm the derived picture matches the chain in every respect, not just balances.",
+      "files": ["lumens-vault/docs/read-model.md (edit)"],
+      "acceptance": [
+        "Ingest from empty against the deployed testnet contract to the tip",
+        "Every reconstructed vault is reconciled against get_vault, not a sample, and the count is stated",
+        "The derived whitelist matches live is_whitelisted for every asset ever referenced",
+        "Derived paused state, admin and lock bounds match their live view functions",
+        "The admin action history matches the transactions actually submitted during deployment and seeding",
+        "Any discrepancy is explained; an unexplained one blocks this issue"
+      ],
+      "nonGoals": ["Not a production deployment of the backend."]
+    }
+  ]
+}

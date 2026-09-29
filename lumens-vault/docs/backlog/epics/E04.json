@@ -1,0 +1,231 @@
+{
+  "epic": "E04",
+  "title": "Contract: Authorization & Security Hardening",
+  "milestone": "LV1 - Contract",
+  "issues": [
+    {
+      "id": "E04-01",
+      "title": "Establish that no current test actually exercises authorization",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["G-9", "NFR-1"],
+      "dependsOn": ["E01-14"],
+      "scope": "Every test calls env.mock_all_auths(), which makes every require_auth() succeed unconditionally. The suite therefore proves nothing about access control: an admin function with its auth check deleted entirely would still pass all five tests. Before writing auth tests, demonstrate the hole so the value of the rest of this epic is not theoretical.",
+      "files": ["lumens-vault/docs/adr/0006-auth-testing-approach.md (new)"],
+      "acceptance": [
+        "Demonstrate the gap concretely: temporarily comment out one admin.require_auth() call, show the full suite still passes, then restore it. Paste both runs. Do not commit the commented-out version",
+        "The ADR records which soroban-sdk 28 mechanism the project will use for real auth tests — mock_auths with explicit MockAuth entries, or dropping mock_all_auths and asserting the failure — verified by compiling a sample against the installed SDK, not chosen from memory",
+        "The ADR states the standard the epic holds to: for each guarded function, one test proves the authorized caller succeeds and one proves an unauthorized caller fails"
+      ],
+      "nonGoals": ["No production code changes."]
+    },
+    {
+      "id": "E04-02",
+      "title": "Add a test helper for authorized and unauthorized invocation",
+      "labels": ["contract", "testing"],
+      "requirements": ["G-9"],
+      "dependsOn": ["E04-01"],
+      "scope": "Twelve or so auth tests follow. Without a shared helper each repeats the same MockAuth construction and they will drift. Build the helper once, using whichever mechanism E04-01 verified.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "A helper sets up the environment so only a named address is authorized, rather than mocking all auths",
+        "A second helper or convention makes asserting an auth failure readable — the failure mode for a missing auth in soroban-sdk 28 is documented in a comment, since it differs from a contract Error and is a common source of confusion",
+        "One existing test is converted to use it as a worked example, and still passes",
+        "`cargo test` green"
+      ],
+      "nonGoals": ["Not converting all tests yet — each guarded function gets its own issue."]
+    },
+    {
+      "id": "E04-03",
+      "title": "Test pause and unpause reject an unauthorized caller",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["FR-10", "G-9", "NFR-1"],
+      "dependsOn": ["E04-02"],
+      "scope": "pause halts all deposits and withdrawals. An attacker who can call it performs a denial of service on every user's funds.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "The admin can pause and unpause; is_paused reflects each",
+        "A non-admin address calling pause fails, and the test asserts the specific failure rather than any error",
+        "Same for unpause",
+        "A non-admin cannot pause even while the contract is already paused"
+      ],
+      "nonGoals": ["Not testing what pause blocks — that is E05-06."]
+    },
+    {
+      "id": "E04-04",
+      "title": "Test add_asset and remove_asset reject an unauthorized caller",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["FR-11", "G-9", "NFR-1"],
+      "dependsOn": ["E04-02"],
+      "scope": "Whitelisting is what decides which token contracts the vault will call transfer on. An attacker who can whitelist can introduce a malicious token contract and have the vault interact with it.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Admin can add and remove an asset; is_whitelisted reflects each",
+        "A non-admin calling add_asset fails; the asset remains not whitelisted afterwards",
+        "A non-admin calling remove_asset fails; the asset remains whitelisted afterwards",
+        "Both negative tests assert state is unchanged, not merely that the call errored"
+      ],
+      "nonGoals": ["Not the delisting-withdrawal invariant, which is E03-11."]
+    },
+    {
+      "id": "E04-05",
+      "title": "Test transfer_admin and that the old admin genuinely loses access",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["FR-12", "G-9", "NFR-1"],
+      "dependsOn": ["E04-02"],
+      "scope": "The old backlog asked to verify the previous admin's later calls 'actually fail' and to assert what really happens rather than assume. Under mock_all_auths they would not have failed, so that criterion was unmeetable as written. With real auth tests it becomes meaningful and is the single most important admin test: a transfer that does not revoke is a silent two-admin contract.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Admin transfers to a new address; get_admin_address returns the new one",
+        "The new admin can perform an admin action",
+        "The previous admin's subsequent admin call fails — assert the actual observed failure and state in a comment what it was",
+        "A third, never-admin address also fails",
+        "transfer_admin by a non-admin fails and leaves the admin unchanged"
+      ],
+      "nonGoals": ["Not covering multisig accounts — that is E04-10 and is documentation, not a unit test."]
+    },
+    {
+      "id": "E04-06",
+      "title": "Test update_config rejects an unauthorized caller",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["FR-13", "G-9"],
+      "dependsOn": ["E04-02", "E02-08"],
+      "scope": "update_config changes the lock bounds every future deposit is validated against. An attacker who can call it could set a minimum of zero and make locks meaningless for new deposits.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Admin can change bounds and get_lock_bounds reflects them",
+        "A non-admin calling update_config fails and the bounds are unchanged afterwards",
+        "A deposit after a successful admin change is validated against the new bounds, not the old ones"
+      ],
+      "nonGoals": ["Bounds validation itself is E02-08."]
+    },
+    {
+      "id": "E04-07",
+      "title": "Test upgrade rejects an unauthorized caller",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["FR-14", "G-9", "NFR-1"],
+      "dependsOn": ["E04-02"],
+      "scope": "upgrade replaces the entire running bytecode. It is the highest-consequence function in the contract — an attacker who can call it owns the vault and everything in it.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "A non-admin calling upgrade with a validly uploaded wasm hash fails",
+        "version() still returns the pre-upgrade value afterwards, proving the bytecode did not change",
+        "The admin performing the same call succeeds, so the test proves the guard and not merely a broken call path",
+        "Reuses the v2 fixture already used by test_real_upgrade_and_state_migration rather than introducing another binary"
+      ],
+      "nonGoals": ["The migration assertions stay in the existing upgrade test."]
+    },
+    {
+      "id": "E04-08",
+      "title": "Test deposit and withdraw require the funds owner's authorization",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["G-9", "NFR-1", "FR-7"],
+      "dependsOn": ["E04-02"],
+      "scope": "deposit calls from.require_auth() and withdraw calls to.require_auth(). These protect user funds directly: without the withdraw check, anyone could name another user's address and drain their matured vault.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "A withdraw authorized by an address other than the vault owner fails, and the vault's balance is unchanged afterwards",
+        "A deposit authorized by an address other than `from` fails, and no vault is created — assert get_user_vault_count is still 0",
+        "The owner's own authorized calls succeed in the same test, proving the negative case is not just a broken setup"
+      ],
+      "nonGoals": ["Not re-testing amount validation."]
+    },
+    {
+      "id": "E04-09",
+      "title": "Decide whether Error::NotInitialized is reachable and act on it",
+      "labels": ["contract", "security"],
+      "requirements": ["G-10", "D-9", "NFR-2"],
+      "dependsOn": ["E01-14"],
+      "scope": "NotInitialized is returned when Admin, Config or State is missing from instance storage. Since __constructor runs atomically at deploy and writes all three, it is unclear whether any reachable path can produce it. NFR-2 requires every Error variant to be triggered by a test, which is unsatisfiable for a dead variant — so this must be resolved rather than left to fail review later.",
+      "files": [
+        "lumens-vault/docs/adr/0007-notinitialized-variant.md (new)",
+        "lumens-vault/contracts/lumens-vault/src/contract.rs (edit, if removing)"
+      ],
+      "acceptance": [
+        "Establish whether any path can observe missing instance state — consider at minimum instance storage archival, and whether a contract whose instance entry was archived and restored retains its data",
+        "The finding is recorded with its source; this is exactly the class of claim this project has got wrong before, so cite Stellar documentation rather than reasoning from first principles alone",
+        "If reachable: a test triggers it, satisfying NFR-2",
+        "If unreachable: the variant is removed and the PR notes that error codes are not renumbered — remaining variants keep their existing numbers"
+      ],
+      "nonGoals": ["Do not renumber any other error code."]
+    },
+    {
+      "id": "E04-10",
+      "title": "Document the admin multisig setup and the medium-threshold requirement",
+      "labels": ["docs", "security"],
+      "requirements": ["FR-8", "D-2", "NFR-1"],
+      "dependsOn": ["E01-14"],
+      "scope": "FR-8 carries a verified caveat with real consequences and no issue ever owned it. require_auth() on a classic Stellar G-account checks that account's medium threshold, not high. A team that adds signers without setting the medium threshold deliberately ends up with an admin they believe is N-of-M but which is in practice satisfiable by fewer signatures. The contract cannot detect or prevent this; only the account setup can.",
+      "files": ["lumens-vault/docs/admin-setup.md (new)"],
+      "acceptance": [
+        "Explains the three Stellar threshold levels and states, with a link to Stellar's own documentation, that require_auth() on a classic account checks medium",
+        "Gives the exact commands to set signers and all three thresholds on a testnet account, and to read them back for verification",
+        "States the verification step that must be performed before any mainnet deployment and who signs off on it",
+        "Records the D-2 decision — classic multisig G-account versus a Soroban smart-contract account — with the reasoning, noting Stellar's own docs flag custom __check_auth accounts as needing rigorous review",
+        "Commands shown are PowerShell-valid"
+      ],
+      "nonGoals": ["Not setting up the production admin account. Not adding multisig logic to the contract; FR-8 excludes that."]
+    },
+    {
+      "id": "E04-11",
+      "title": "Document the token-contract trust assumption in the whitelist",
+      "labels": ["docs", "security"],
+      "requirements": ["FR-11", "NFR-1"],
+      "dependsOn": ["E01-14"],
+      "scope": "The vault calls transfer on whatever contract the admin whitelists. A malicious or broken token could behave arbitrarily during that call. Soroban disallows reentrancy at the host level, which removes the classic attack, but the trust placed in the admin's whitelisting decision should be written down rather than implicit.",
+      "files": ["lumens-vault/docs/security-model.md (new)"],
+      "acceptance": [
+        "States plainly that whitelisting a token is a trust decision and the contract cannot validate token behaviour",
+        "Confirms Soroban's reentrancy stance against primary documentation and cites it — do not assert it from memory",
+        "Documents the ordering in deposit and withdraw relative to the external transfer call, and why the current ordering is safe",
+        "Lists what an admin should check before whitelisting an asset"
+      ],
+      "nonGoals": ["No code changes. No allowlist of specific tokens in the contract."]
+    },
+    {
+      "id": "E04-12",
+      "title": "Add a test that no admin function is callable before any deposit exists",
+      "labels": ["contract", "testing", "security"],
+      "requirements": ["FR-9", "NFR-1"],
+      "dependsOn": ["E04-02"],
+      "scope": "FR-9 replaced a front-runnable initialize with an atomic constructor. The property that matters is that there is no window in which the contract exists and has no admin. Pin it with a test so a future refactor back toward a separate initializer fails loudly.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Immediately after registration with constructor args and before any other call, get_admin_address returns the intended admin",
+        "is_paused returns false and get_lock_bounds returns the constructor's values, proving all three instance keys were written atomically",
+        "A comment explains that this guards FR-9 and that reintroducing a separate initialize function would be a critical regression"
+      ],
+      "nonGoals": ["Not testing deploy-time authorization of a third-party admin; that is a deploy concern covered in E06-04."]
+    },
+    {
+      "id": "E04-13",
+      "title": "Convert remaining tests off mock_all_auths where it hides behaviour",
+      "labels": ["contract", "testing"],
+      "requirements": ["G-9"],
+      "dependsOn": ["E04-03", "E04-04", "E04-05", "E04-06", "E04-07", "E04-08"],
+      "scope": "Once each guarded function has explicit auth coverage, the remaining blanket mock_all_auths calls should be reviewed. Some are legitimate — a test about arithmetic does not need real auth — but each should be a deliberate choice rather than a default.",
+      "files": ["lumens-vault/contracts/lumens-vault/src/test.rs (edit)"],
+      "acceptance": [
+        "Every remaining mock_all_auths call has a one-line comment stating why blanket mocking is acceptable for that specific test",
+        "Any test whose subject is access control uses the explicit helper from E04-02 instead",
+        "`cargo test` green, run 3 times, with output"
+      ],
+      "nonGoals": ["Do not convert tests where blanket mocking genuinely is the right tool; churn for its own sake is not the goal."]
+    },
+    {
+      "id": "E04-14",
+      "title": "Write the pre-mainnet security checklist",
+      "labels": ["docs", "security"],
+      "requirements": ["NFR-1"],
+      "dependsOn": ["E04-09", "E04-10", "E04-11"],
+      "scope": "PROJECT_HANDOFF lists several things that must happen before mainnet and explicitly notes they are 'not yet issues'. Collect them into one checklist that a release cannot skip, and make each item point at the issue that satisfies it.",
+      "files": ["lumens-vault/docs/pre-mainnet-checklist.md (new)"],
+      "acceptance": [
+        "Lists at minimum: live testnet upgrade dry-run with two independent deployments, production admin account with verified medium threshold, event topic counts verified against a real emission, Sorokeep flags verified live, and an independent security review",
+        "Each item names the issue that satisfies it, or is flagged as not yet having one",
+        "Each item has an explicit pass condition, not just a description",
+        "Referenced from README so it is discoverable"
+      ],
+      "nonGoals": ["Not performing the review. Not deploying to mainnet."]
+    }
+  ]
+}
