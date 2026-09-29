@@ -4,7 +4,6 @@ import { Migrator } from "../../src/db/migrator.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { execFileSync } from "node:child_process";
 
 const MIGRATIONS_DIR = path.join(process.cwd(), "src", "db", "migrations");
 const SCHEMA = fs.readFileSync(path.join(process.cwd(), "src", "db", "schema.sql"), "utf8");
@@ -85,8 +84,15 @@ describe("upgrading a v1.0.0 database", () => {
         // today's schema.sql *with* it. One ALTER must succeed and the other must
         // hit a duplicate. Simulating by dropping the column from both tables
         // makes both ALTERs succeed and tests nothing.
-        const legacySchema = execFileSync("git", ["show", "v1.0.0:src/db/schema.sql"],
-            { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+        //
+        // The schema is a vendored fixture rather than `git show v1.0.0:...`:
+        // CI checks out shallow and without tags, so resolving the tag works
+        // locally and fails there. A test that depends on clone depth is
+        // testing the environment.
+        const legacySchema = fs.readFileSync(
+            path.join(process.cwd(), "tests", "db", "fixtures", "schema-v1.0.0.sql"),
+            "utf8",
+        );
 
         const oldPath = tmpDbPath("legacy");
         const legacy = new Database(oldPath);
