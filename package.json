@@ -68,7 +68,7 @@
     "handlebars": "^4.7.9",
     "hono": "^4.12.32",
     "ipaddr.js": "^2.5.0",
-    "nodemailer": "^9.0.3",
+    "nodemailer": "^10.0.12",
     "ora": "^9.4.0",
     "pino": "^10.3.1",
     "prom-client": "^15.1.3",
