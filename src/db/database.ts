@@ -92,7 +92,13 @@ export function getDatabase(customPath?: string): Database.Database {
             // statement could silently never apply and nothing would say so.
             const message = err instanceof Error ? err.message : String(err);
             if (!/duplicate column name|already exists/i.test(message)) {
-                throw new Error(`Live migration failed: ${message}\n  statement: ${sql.trim().slice(0, 120)}`);
+                // `cause` is safe to attach here: these statements are schema DDL
+                // with no credentials in them, unlike the alert channels where the
+                // original error has to be sanitised before it is re-thrown.
+                throw new Error(
+                    `Live migration failed: ${message}\n  statement: ${sql.trim().slice(0, 120)}`,
+                    { cause: err },
+                );
             }
         }
     }
